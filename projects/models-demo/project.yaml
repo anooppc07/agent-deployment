@@ -1,4 +1,4 @@
-# Demo project in the dev environment (scbx-testing): agents that use platform models through the AI gateway.
+# Test bed project in the dev stage (sandbox): agents that use platform models through the AI gateway.
 name: models-demo
 display_name: Models demo (test)
 owner: ai-platform-team
@@ -18,8 +18,8 @@ models:
   connection: platform-models
   # content_safety: not set: platform defaults (severity 4 per category, Prompt Shields on).
   allowed:
-    - name: gpt-5.4-mini
-      tokens_per_minute: 20000             # share of the model's 250,000 TPM in test
+    - name: gpt-5-mini
+      tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
       tokens_per_day: 500000
 
 # Tools this project's agents may use: <owner project>/<tool>, published by the owner's tool-deploy pipeline and shared
