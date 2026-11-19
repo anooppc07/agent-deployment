@@ -13,6 +13,6 @@ gateway:
 models:
   connection: platform-models
   allowed:
-    - name: gpt-5.4-mini
+    - name: gpt-5-mini
       tokens_per_minute: 1000
       tokens_per_day: 10000
