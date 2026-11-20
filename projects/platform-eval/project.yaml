@@ -20,12 +20,15 @@ docs_file: project.md
 models:
   connection: platform-eval-models         # unique in the agent account (models-demo has platform-models)
   allowed:
+    # An evaluation sends every query at once: the limit must cover the whole pack's answers in a minute
+    # (gpt-5-mini answered with about 520 tokens each, plus reasoning). Below that, the gateway's 429 leaves items
+    # unanswered and the coverage check fails the run.
     - name: gpt-5-mini                     # model A, the baseline
-      tokens_per_minute: 10000
-      tokens_per_day: 200000
+      tokens_per_minute: 30000             # with models-demo's 20000: the model's full 50000
+      tokens_per_day: 600000
     - name: gpt-5.4-mini                   # model B, the candidate (only this project may call it before approval)
-      tokens_per_minute: 10000
-      tokens_per_day: 200000
+      tokens_per_minute: 15000             # of 20000; 5000 left for projects' evaluation-only access
+      tokens_per_day: 300000
     - name: gpt-5.1                        # the judge (EVAL_JUDGE_MODEL): every evaluator call of both runs uses it
       tokens_per_minute: 40000
       tokens_per_day: 800000
