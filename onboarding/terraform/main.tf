@@ -47,6 +47,14 @@ resource "terraform_data" "validated" {
       error_message = "Not registered on the gateway: ${join(", ", [for n in keys(local.allowed) : n if !contains(keys(local.registry), n)])}. Registered: ${join(", ", keys(local.registry))}."
     }
     precondition {
+      condition     = alltrue([for n, st in local.model_status : contains(["available", "evaluating"], st)])
+      error_message = "models.allowed[].status must be available (default) or evaluating."
+    }
+    precondition {
+      condition     = alltrue([for n, st in local.model_status : st != "evaluating" || local.allowed[n].tokens_per_minute <= local.evaluating_tpm_cap])
+      error_message = "A model with status evaluating gets at most ${local.evaluating_tpm_cap} tokens per minute: it's for the project's evaluation only."
+    }
+    precondition {
       condition     = alltrue([for n, m in local.allowed : m.tokens_per_minute > 0 && m.tokens_per_day >= m.tokens_per_minute])
       error_message = "Each allowed model needs tokens_per_minute > 0 and tokens_per_day >= tokens_per_minute."
     }
@@ -148,6 +156,20 @@ resource "azurerm_api_management_named_value" "limit" {
 }
 
 ## AI Gateway connection in the project: its agents use "<connection>/<model>"
+
+# The project's status for each allowed model (P1): evaluating or available. The agent pipeline reads it before pinning an
+# agent version on a model (pin lock); only this stack writes it, from project.yaml.
+resource "azurerm_api_management_named_value" "status" {
+  for_each = local.models
+
+  name                = "model-status-${var.project}-${replace(each.key, ".", "-")}"
+  display_name        = "model-status-${var.project}-${replace(each.key, ".", "-")}"
+  api_management_name = data.azurerm_api_management.this.name
+  resource_group_name = data.azurerm_api_management.this.resource_group_name
+  value               = local.model_status[each.key]
+  secret              = false
+  tags                = ["model-status"]
+}
 
 resource "azapi_resource" "connection" {
   type                      = "Microsoft.CognitiveServices/accounts/projects/connections@2025-04-01-preview"
