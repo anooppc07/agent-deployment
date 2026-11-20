@@ -19,6 +19,9 @@ evaluators:
   intent_resolution: {floor: 0.80}
 margin: 0.10
 hard_stops: []
+# Share of queries that must be scored per evaluator and model (an evaluator error leaves an item unscored).
+# Default 1.0. Test bed: 0.9, so 1 of 15 may be unscored; a real pack of ~200 should stay close to 1.0.
+min_coverage: 0.9
 
 budget:
   max_latency_p95_ratio: 1.5               # candidate p95 latency <= 1.5 x baseline's

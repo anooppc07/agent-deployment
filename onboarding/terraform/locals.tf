@@ -94,8 +94,12 @@ locals {
       format            = try(local.registry[name].format, "OpenAI")
       tokens_per_minute = m.tokens_per_minute
       tokens_per_day    = m.tokens_per_day
+      # A judge model (registry purpose: judge, set by the platform, not the project) gets Prompt Shields off: a judge
+      # prompt is the evaluator's instructions around a model's answer and reads as an injection attempt (403).
+      # Harm categories still apply. Not a project setting, so it bypasses the "only stricter" validation.
       content_safety = [
-        for k, v in merge(local.content_safety_project, local.content_safety_models[name]) : {
+        for k, v in merge(local.content_safety_project, local.content_safety_models[name],
+        try(local.registry[name].purpose, "serving") == "judge" ? { prompt_shields = "false" } : {}) : {
           name  = "cs-${replace(k, "_", "-")}"
           value = tostring(v)
         } if contains(keys(local.content_safety_defaults), k)
