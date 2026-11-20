@@ -82,6 +82,13 @@ locals {
     { for name, cs in local.content_safety_models : "models.allowed[${name}].content_safety" => cs },
   )
 
+  # A judge model (registry purpose: judge, set by the platform, not the project) gets Prompt Shields off: a judge
+  # prompt is the evaluator's instructions around a model's answer and reads as an injection attempt (403).
+  # Harm categories still apply. Not a project setting, so it bypasses the "only stricter" validation.
+  content_safety_judge = {
+    for name in keys(local.allowed) : name => { for k in try(local.registry[name].purpose, "serving") == "judge" ? ["prompt_shields"] : [] : k => "false" }
+  }
+
   # Everything the policy needs per allowed model; registry values only, nothing typed in the project.
   models = {
     for name, m in local.allowed : name => {
@@ -95,7 +102,7 @@ locals {
       tokens_per_minute = m.tokens_per_minute
       tokens_per_day    = m.tokens_per_day
       content_safety = [
-        for k, v in merge(local.content_safety_project, local.content_safety_models[name]) : {
+        for k, v in merge(local.content_safety_project, local.content_safety_models[name], local.content_safety_judge[name]) : {
           name  = "cs-${replace(k, "_", "-")}"
           value = tostring(v)
         } if contains(keys(local.content_safety_defaults), k)

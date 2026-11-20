@@ -599,6 +599,8 @@ def validate(names):
                                   " add instructions_file (for a hosted agent, the behaviour its code implements)")
                 if not 0 < float(ev.get("min_pass_rate", 0)) <= 1 or not ev.get("judge_model"):
                     errors.append(f"{n}/{an}: judge_model and min_pass_rate (0-1] are required")
+                if not 0 < float(ev.get("min_coverage", 1.0)) <= 1:
+                    errors.append(f"{n}/{an}: min_coverage (optional) is the share of queries that must be scored, (0-1]")
         errors += validate_models(n, p)
         errors += validate_foundry_project(n, p)
         errors += validate_tools(n, p)
@@ -819,7 +821,8 @@ def run_gate(oai, a, version):
         ok = ok and rate >= float(ev["min_pass_rate"])
     if set(scores) != set(ev["evaluators"]):
         ok = False   # an evaluator produced no result
-    unscored = {k: len(ev["dataset"]) - s["total"] for k, s in scores.items() if s["total"] < len(ev["dataset"])}
+    need = -(-len(ev["dataset"]) * float(ev.get("min_coverage", 1.0)) // 1)   # evals.yaml min_coverage, default 1.0
+    unscored = {k: len(ev["dataset"]) - s["total"] for k, s in scores.items() if s["total"] < need}
     if unscored:
         ok = False   # an item with an evaluator error is neither passed nor failed: the rate would hide it
         print(f"{a['name']} v{version}: not every query was scored: {unscored}")

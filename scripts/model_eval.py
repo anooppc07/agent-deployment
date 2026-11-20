@@ -5,7 +5,8 @@
 
 run: in the platform evaluation project (platform-eval), one probe agent per model (neutral instructions, no tools)
 on <connection>/<model>, so calls go through the AI gateway like any project's. Both probes answer the same queries;
-the same judge scores both. The verdict is four checks, all required, after a coverage check (every query scored for both models):
+the same judge scores both. The verdict is four checks, all required, after a coverage check: per evaluator and model, at least min_coverage of
+the queries scored (pack setting, default 1.0: every query; an item with an evaluator error has no pass or fail):
   floors         candidate pass rate per evaluator >= its floor
   hard stops     listed evaluators pass every item
   no regression  candidate pass rate >= baseline pass rate - margin (non-inferiority), per evaluator
@@ -46,6 +47,8 @@ def load_pack(path):
     unknown = set(pack["evaluators"]) - EVALUATORS
     if unknown:
         sys.exit(f"{path}: unknown evaluators {sorted(unknown)}; use {sorted(EVALUATORS)}")
+    if not 0 < float(pack.get("min_coverage", 1.0)) <= 1:
+        sys.exit(f"{path}: min_coverage is the share of queries that must be scored, (0-1]")
     if not set(pack.get("hard_stops") or []) <= set(pack["evaluators"]):
         sys.exit(f"{path}: hard_stops must be listed under evaluators")
     pack["judge"] = pack.get("judge_model") or os.environ.get("EVAL_JUDGE_MODEL") or sys.exit(
@@ -232,19 +235,22 @@ def run(path):
         # Coverage: every query scored for both models. An item with an evaluator error is neither passed nor
         # failed, so without this check the pass rate would be over fewer items and could hide a gap.
         expected = len(pack["dataset"])
-        if b["total"] < expected or c["total"] < expected:
+        need = -(-expected * float(pack.get("min_coverage", 1.0)) // 1)   # scored items needed (rounded up)
+        if b["total"] < need or c["total"] < need:
             rows.append(f"| {e} | {b['passed']}/{b['total']} | {c['passed']}/{c['total']} | | | | "
                         f"FAIL: incomplete, {expected - b['total']} baseline and {expected - c['total']} candidate "
-                        f"of {expected} not scored |")
+                        f"of {expected} not scored (at least {int(need)} must be) |")
             verdict = False
-            incomplete.update(role for role, x in (("baseline", b), ("candidate", c)) if x["total"] < expected)
+            incomplete.update(role for role, x in (("baseline", b), ("candidate", c)) if x["total"] < need)
             continue
+        incomplete.update(role for role, x in (("baseline", b), ("candidate", c)) if x["total"] < expected)
         floor_ok = c["rate"] >= float(cfg.get("floor", 0.0))
         regression_ok = c["rate"] >= b["rate"] - margin
         hard_ok = e not in (pack.get("hard_stops") or []) or c["passed"] == c["total"]
         ok = floor_ok and regression_ok and hard_ok
         verdict = verdict and ok
-        rows.append(f"| {e} | {b['passed']}/{b['total']} ({b['rate']:.0%}) | {c['passed']}/{c['total']} ({c['rate']:.0%}) "
+        cov = lambda x: "" if x["total"] == expected else f", {x['total']} of {expected} scored"
+        rows.append(f"| {e} | {b['passed']}/{b['total']} ({b['rate']:.0%}{cov(b)}) | {c['passed']}/{c['total']} ({c['rate']:.0%}{cov(c)}) "
                     f"| {'ok' if floor_ok else 'FAIL'} (≥ {float(cfg.get('floor', 0)):.0%}) "
                     f"| {'ok' if regression_ok else 'FAIL'} (≥ {b['rate'] - margin:.0%}) "
                     f"| {'ok' if hard_ok else 'FAIL'} | {'pass' if ok else 'FAIL'} |")
