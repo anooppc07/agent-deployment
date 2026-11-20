@@ -10,7 +10,8 @@ pack_version: 1
 #   floor        the candidate's pass rate for the evaluator is at least this
 #   no regression the candidate's pass rate is at least the baseline's minus margin (non-inferiority)
 #   hard stop    the evaluator must pass every item (listed in hard_stops)
-#   budget       not measured yet (reported as such)
+#   budget       the candidate's p95 latency, tokens per answer and (with prices) cost per answer are within the
+#                given ratio of the baseline's, measured end to end through the gateway
 evaluators:
   relevance: {floor: 0.80}
   coherence: {floor: 0.80}
@@ -18,6 +19,14 @@ evaluators:
   intent_resolution: {floor: 0.80}
 margin: 0.10
 hard_stops: []
+
+budget:
+  max_latency_p95_ratio: 1.5               # candidate p95 latency <= 1.5 x baseline's
+  max_tokens_ratio: 1.5                    # candidate tokens per answer <= 1.5 x baseline's
+  # max_cost_ratio: 1.2                    # with prices: candidate cost per answer <= 1.2 x baseline's
+  # prices:                                # USD per million tokens, blended input/output; check current pricing
+  #   gpt-5-mini: 0.0
+  #   gpt-5.4-mini: 0.0
 
 # Test-bed size: 15 general queries. The proposal's sample size (about 200 items for a 5-point margin) applies to a
 # real pack.

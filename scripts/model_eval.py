@@ -5,11 +5,13 @@
 
 run: in the platform evaluation project (platform-eval), one probe agent per model (neutral instructions, no tools)
 on <connection>/<model>, so calls go through the AI gateway like any project's. Both probes answer the same queries;
-the same judge scores both. The verdict is four checks, all required:
+the same judge scores both. The verdict is four checks, all required, after a coverage check (every query scored for both models):
   floors         candidate pass rate per evaluator >= its floor
   hard stops     listed evaluators pass every item
   no regression  candidate pass rate >= baseline pass rate - margin (non-inferiority), per evaluator
-  budget         not measured yet: reported, not enforced
+  budget         each probe answers the pack's queries once more, through the gateway: p95 latency, average tokens
+                 per answer and, when the pack lists prices, average cost per answer, each within the pack's ratio
+                 of the baseline's (budget: max_latency_p95_ratio, max_tokens_ratio, max_cost_ratio, prices)
 The judge is a setting: the pack's judge_model, else the GitHub variable EVAL_JUDGE_MODEL (a gateway model name).
 Each run records the pack version, dataset hash, judge, models and commit, in Foundry (run metadata) and in
 .pipeline/model-eval.json (uploaded as a workflow artifact).
@@ -122,6 +124,48 @@ def rates(r):
     return out
 
 
+def measure(oai, model, version, pack):
+    """Latency (seconds, end to end through the gateway) and tokens per answer for one probe version."""
+    latencies, tokens = [], []
+    for d in pack["dataset"]:
+        start = time.time()
+        resp = oai.responses.create(input=d["query"], extra_body={"agent_reference": {
+            "name": probe_name(model), "version": str(version), "type": "agent_reference"}})
+        latencies.append(time.time() - start)
+        u = getattr(resp, "usage", None)
+        tokens.append((getattr(u, "input_tokens", 0) or 0) + (getattr(u, "output_tokens", 0) or 0) if u else 0)
+    lat = sorted(latencies)
+    p95 = lat[min(len(lat) - 1, int(round(0.95 * (len(lat) - 1))))]
+    price = ((pack.get("budget") or {}).get("prices") or {}).get(model)   # USD per million tokens (blended)
+    avg_tokens = sum(tokens) / len(tokens)
+    return {"latency_p95_s": round(p95, 2), "latency_avg_s": round(sum(lat) / len(lat), 2),
+            "tokens_avg": round(avg_tokens, 1), "measured_tokens": all(tokens),
+            "cost_avg_usd": round(avg_tokens * price / 1e6, 6) if price is not None else None}
+
+
+def budget_rows(pack, base, cand):
+    """Rows and verdict for the budget check: candidate within the pack's ratio of the baseline."""
+    b = pack.get("budget") or {}
+    checks = [("p95 latency (s)", "latency_p95_s", b.get("max_latency_p95_ratio", 1.5)),
+              ("tokens per answer", "tokens_avg", b.get("max_tokens_ratio", 1.5)),
+              ("cost per answer (USD)", "cost_avg_usd", b.get("max_cost_ratio"))]
+    rows, ok_all = [], True
+    for label, key, ratio in checks:
+        bv, cv = base.get(key), cand.get(key)
+        if ratio is None or bv is None or cv is None:
+            rows.append(f"| {label} | {bv if bv is not None else 'n/a'} | {cv if cv is not None else 'n/a'} | not checked |")
+            continue
+        if key == "tokens_avg" and not (base["measured_tokens"] and cand["measured_tokens"]):
+            rows.append(f"| {label} | {bv} | {cv} | FAIL: token usage missing from some responses |")
+            ok_all = False
+            continue
+        limit = bv * float(ratio)
+        ok = cv <= limit
+        ok_all = ok_all and ok
+        rows.append(f"| {label} | {bv} | {cv} | {'ok' if ok else 'FAIL'} (≤ {limit:.4g}, {float(ratio)}× baseline) |")
+    return rows, ok_all
+
+
 def run(path):
     from azure.ai.projects import AIProjectClient
     from azure.ai.projects.models import PromptAgentDefinition
@@ -144,9 +188,10 @@ def run(path):
         print(f"probe {probe_name(model)} v{v.version} on {connection}/{model}")
 
     definition = evaluation(oai, pack, connection)
-    runs = {role: run_model(oai, definition, pack, model, versions[model], role)
-            for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"]))}
-    done = {role: wait(oai, definition, r) for role, r in runs.items()}
+    # One run at a time: both runs share the judge's token limit, and a throttled judge call leaves an item unscored.
+    done = {}
+    for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"])):
+        done[role] = wait(oai, definition, run_model(oai, definition, pack, model, versions[model], role))
     scores = {role: rates(r) for role, r in done.items()}
     reports = {role: getattr(r, "report_url", None) for role, r in done.items()}
 
@@ -157,6 +202,15 @@ def run(path):
         c = scores["candidate"].get(e)
         if b is None or c is None:
             rows.append(f"| {e} | {b and b['rate']} | {c and c['rate']} | no result | | | FAIL |")
+            verdict = False
+            continue
+        # Coverage: every query scored for both models. An item with an evaluator error is neither passed nor
+        # failed, so without this check the pass rate would be over fewer items and could hide a gap.
+        expected = len(pack["dataset"])
+        if b["total"] < expected or c["total"] < expected:
+            rows.append(f"| {e} | {b['passed']}/{b['total']} | {c['passed']}/{c['total']} | | | | "
+                        f"FAIL: incomplete, {expected - b['total']} baseline and {expected - c['total']} candidate "
+                        f"of {expected} not scored |")
             verdict = False
             continue
         floor_ok = c["rate"] >= float(cfg.get("floor", 0.0))
@@ -173,10 +227,15 @@ def run(path):
             verdict = False
             rows.append(f"| ({role} run) | status {done[role].status} | | | | | FAIL |")
 
+    perf = {role: measure(oai, model, versions[model], pack)
+            for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"]))}
+    brows, budget_ok = budget_rows(pack, perf["baseline"], perf["candidate"])
+    verdict = verdict and budget_ok
+
     record = {"candidate": pack["candidate"], "baseline": pack["baseline"], "pack": path,
               "pack_version": pack["pack_version"], "dataset_sha": pack["dataset_sha"], "judge": pack["judge"],
               "margin": margin, "verdict": "pass" if verdict else "fail", "scores": scores, "reports": reports,
-              "probe_versions": versions, "eval_id": definition.id,
+              "probe_versions": versions, "eval_id": definition.id, "budget": perf, "budget_ok": budget_ok,
               "git_commit": os.environ.get("GITHUB_SHA", "local"),
               "at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     os.makedirs(STATE, exist_ok=True)
@@ -189,7 +248,9 @@ def run(path):
             f"judge `{pack['judge']}` · margin {margin:.0%} · {links}\n\n"
             "| Evaluator | Baseline | Candidate | Floor | No regression | Hard stop | Result |\n"
             "|---|---|---|---|---|---|---|\n" + "\n".join(rows) +
-            f"\n\n**Budget:** not measured yet.\n\n**Verdict: {'PASS' if verdict else 'FAIL'}**"
+            "\n\n**Budget** (each query answered once more, end to end through the gateway)\n\n"
+            "| Measure | Baseline | Candidate | Check |\n|---|---|---|---|\n" + "\n".join(brows) +
+            f"\n\n**Verdict: {'PASS' if verdict else 'FAIL'}**"
             + ("" if verdict else ": the candidate stays in INTAKE; no project is notified."))
     if not verdict:
         sys.exit(f"Model evaluation failed: {pack['candidate']} vs {pack['baseline']}")

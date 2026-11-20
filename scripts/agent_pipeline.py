@@ -819,6 +819,10 @@ def run_gate(oai, a, version):
         ok = ok and rate >= float(ev["min_pass_rate"])
     if set(scores) != set(ev["evaluators"]):
         ok = False   # an evaluator produced no result
+    unscored = {k: len(ev["dataset"]) - s["total"] for k, s in scores.items() if s["total"] < len(ev["dataset"])}
+    if unscored:
+        ok = False   # an item with an evaluator error is neither passed nor failed: the rate would hide it
+        print(f"{a['name']} v{version}: not every query was scored: {unscored}")
     report = getattr(r, "report_url", None)
     line = ", ".join(f"{k} {s['passed']}/{s['total']}" for k, s in scores.items()) or f"status {r.status}"
     summary(f"**{a['name']} v{version}** evaluation {'PASSED' if ok else 'FAILED'} "
