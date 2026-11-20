@@ -359,8 +359,12 @@ def notify(path, days="14"):
     if os.path.exists(os.path.join(STATE, "model-eval.json")):
         with open(os.path.join(STATE, "model-eval.json"), encoding="utf-8") as fh:
             record = json.load(fh)
-    open_titles = {i["title"] for i in requests.get(api, headers=headers, params={"state": "open", "per_page": 100},
-                                                     timeout=30).json() if "pull_request" not in i}
+    listing = requests.get(api, headers=headers, params={"state": "open", "per_page": 100}, timeout=30)
+    if listing.status_code == 410:
+        sys.exit(f"Issues are turned off in {repo} (GitHub turns them off on forks): Settings > General > Features > "
+                 "Issues, then re-run this job.")
+    listing.raise_for_status()
+    open_titles = {i["title"] for i in listing.json() if "pull_request" not in i}
     run_url = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
     rows = []
     for project, owner in consumers(pack["baseline"]):
