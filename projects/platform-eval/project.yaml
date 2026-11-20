@@ -26,6 +26,6 @@ models:
     - name: gpt-5.4-mini                   # model B, the candidate (only this project may call it before approval)
       tokens_per_minute: 10000
       tokens_per_day: 200000
-    - name: gpt-5.1                        # the judge (EVAL_JUDGE_MODEL)
-      tokens_per_minute: 20000
-      tokens_per_day: 400000
+    - name: gpt-5.1                        # the judge (EVAL_JUDGE_MODEL): every evaluator call of both runs uses it
+      tokens_per_minute: 40000
+      tokens_per_day: 800000

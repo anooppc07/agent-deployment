@@ -5,7 +5,7 @@
 
 run: in the platform evaluation project (platform-eval), one probe agent per model (neutral instructions, no tools)
 on <connection>/<model>, so calls go through the AI gateway like any project's. Both probes answer the same queries;
-the same judge scores both. The verdict is four checks, all required:
+the same judge scores both. The verdict is four checks, all required, after a coverage check (every query scored for both models):
   floors         candidate pass rate per evaluator >= its floor
   hard stops     listed evaluators pass every item
   no regression  candidate pass rate >= baseline pass rate - margin (non-inferiority), per evaluator
@@ -144,9 +144,10 @@ def run(path):
         print(f"probe {probe_name(model)} v{v.version} on {connection}/{model}")
 
     definition = evaluation(oai, pack, connection)
-    runs = {role: run_model(oai, definition, pack, model, versions[model], role)
-            for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"]))}
-    done = {role: wait(oai, definition, r) for role, r in runs.items()}
+    # One run at a time: both runs share the judge's token limit, and a throttled judge call leaves an item unscored.
+    done = {}
+    for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"])):
+        done[role] = wait(oai, definition, run_model(oai, definition, pack, model, versions[model], role))
     scores = {role: rates(r) for role, r in done.items()}
     reports = {role: getattr(r, "report_url", None) for role, r in done.items()}
 
@@ -157,6 +158,15 @@ def run(path):
         c = scores["candidate"].get(e)
         if b is None or c is None:
             rows.append(f"| {e} | {b and b['rate']} | {c and c['rate']} | no result | | | FAIL |")
+            verdict = False
+            continue
+        # Coverage: every query scored for both models. An item with an evaluator error is neither passed nor
+        # failed, so without this check the pass rate would be over fewer items and could hide a gap.
+        expected = len(pack["dataset"])
+        if b["total"] < expected or c["total"] < expected:
+            rows.append(f"| {e} | {b['passed']}/{b['total']} | {c['passed']}/{c['total']} | | | | "
+                        f"FAIL: incomplete, {expected - b['total']} baseline and {expected - c['total']} candidate "
+                        f"of {expected} not scored |")
             verdict = False
             continue
         floor_ok = c["rate"] >= float(cfg.get("floor", 0.0))
