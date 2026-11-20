@@ -3,7 +3,7 @@ name: demo-assistant
 display_name: Demo assistant
 description: Answers short general questions, to test platform models through the gateway.
 owner: ai-platform-team
-model: platform-models/gpt-5-mini
+model: platform-models/gpt-5.4-mini       # issue #9: candidate B; pinned only if it passes against the serving version and is approved
 instructions_file: instructions.md
 
 gateway:
