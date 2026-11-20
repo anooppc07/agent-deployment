@@ -1,4 +1,4 @@
-judge_model: platform-models/gpt-5-mini
+# judge: the platform default (EVAL_JUDGE_MODEL, gpt-5.1); set judge_model to override
 min_pass_rate: 0.8
 evaluators: [relevance, coherence]
 dataset:
