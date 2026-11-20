@@ -133,8 +133,10 @@ def errors(oai, definition, r, limit=3):
                 for res in (getattr(item, "results", None) or []):
                     d = res if isinstance(res, dict) else (res.model_dump() if hasattr(res, "model_dump") else vars(res))
                     if d.get("passed") is None:
-                        msg = f"{d.get('name', '?')}: " + json.dumps({k: v for k, v in d.items() if k != "name"},
-                                                                    default=str)[:200]
+                        err = ((d.get("sample") or {}).get("error") or {})
+                        text = err.get("message") or json.dumps({k: v for k, v in d.items() if k != "name"}, default=str)
+                        print(f"  unscored item, {d.get('name', '?')}: {text[:1000]}")   # whole message in the job log
+                        msg = f"{d.get('name', '?')}: {text[:600]}"
                         break
             if msg:
                 out.append(str(msg)[:160])
@@ -324,7 +326,7 @@ def run(path):
             f"judge `{pack['judge']}` · margin {margin:.0%} · {links}\n\n"
             "| Evaluator | Baseline | Candidate | Floor | No regression | Hard stop | Result |\n"
             "|---|---|---|---|---|---|---|\n" + "\n".join(rows)
-            + "".join(f"\n\n**Why {role} items weren't scored:** " + ("; ".join(f"`{m}`" for m in msgs) or
+            + "".join(f"\n\n**Why {role} items weren't scored:**\n" + ("\n".join(f"- {m}" for m in msgs) or
                       "no error message in the output items; open the report") for role, msgs in why.items())
             + f"\n\n**Budget** (source: {perf['baseline']['source']})\n\n"
             "| Measure | Baseline | Candidate | Check |\n|---|---|---|---|\n" + "\n".join(brows) +
