@@ -116,6 +116,27 @@ def wait(oai, definition, run):
     sys.exit(f"evaluation run {run.id} still running after 40 minutes")
 
 
+def errors(oai, definition, r, limit=3):
+    """Why items weren't scored: the first few output items' errors (for example the gateway's 429)."""
+    out = []
+    try:
+        for item in oai.evals.runs.output_items.list(run_id=r.id, eval_id=definition.id, limit=100):
+            sample = getattr(item, "sample", None)
+            err = getattr(sample, "error", None) if sample is not None else None
+            msg = (getattr(err, "message", None) or getattr(err, "code", None)) if err else None
+            if not msg:
+                for res in (getattr(item, "results", None) or []):
+                    if isinstance(res, dict) and res.get("passed") is None and res.get("sample", {}).get("error"):
+                        msg = str(res["sample"]["error"])
+            if msg:
+                out.append(str(msg)[:160])
+            if len(out) >= limit:
+                break
+    except Exception as e:  # the listing is diagnostics only
+        out.append(f"(could not list output items: {e})")
+    return out
+
+
 def rates(r):
     out = {}
     for pc in (getattr(r, "per_testing_criteria_results", None) or []):
@@ -196,7 +217,7 @@ def run(path):
     reports = {role: getattr(r, "report_url", None) for role, r in done.items()}
 
     margin = float(pack.get("margin", 0.0))
-    rows, verdict = [], True
+    rows, verdict, incomplete = [], True, set()
     for e, cfg in pack["evaluators"].items():
         b = scores["baseline"].get(e)
         c = scores["candidate"].get(e)
@@ -212,6 +233,7 @@ def run(path):
                         f"FAIL: incomplete, {expected - b['total']} baseline and {expected - c['total']} candidate "
                         f"of {expected} not scored |")
             verdict = False
+            incomplete.update(role for role, x in (("baseline", b), ("candidate", c)) if x["total"] < expected)
             continue
         floor_ok = c["rate"] >= float(cfg.get("floor", 0.0))
         regression_ok = c["rate"] >= b["rate"] - margin
@@ -227,6 +249,8 @@ def run(path):
             verdict = False
             rows.append(f"| ({role} run) | status {done[role].status} | | | | | FAIL |")
 
+    why = {role: errors(oai, definition, done[role]) for role in sorted(incomplete)}
+
     perf = {role: measure(oai, model, versions[model], pack)
             for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"]))}
     brows, budget_ok = budget_rows(pack, perf["baseline"], perf["candidate"])
@@ -235,7 +259,7 @@ def run(path):
     record = {"candidate": pack["candidate"], "baseline": pack["baseline"], "pack": path,
               "pack_version": pack["pack_version"], "dataset_sha": pack["dataset_sha"], "judge": pack["judge"],
               "margin": margin, "verdict": "pass" if verdict else "fail", "scores": scores, "reports": reports,
-              "probe_versions": versions, "eval_id": definition.id, "budget": perf, "budget_ok": budget_ok,
+              "probe_versions": versions, "eval_id": definition.id, "budget": perf, "budget_ok": budget_ok, "unscored_reasons": why,
               "git_commit": os.environ.get("GITHUB_SHA", "local"),
               "at": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")}
     os.makedirs(STATE, exist_ok=True)
@@ -247,8 +271,10 @@ def run(path):
             f"Pack v{pack['pack_version']} ({len(pack['dataset'])} queries, dataset `{pack['dataset_sha']}`) · "
             f"judge `{pack['judge']}` · margin {margin:.0%} · {links}\n\n"
             "| Evaluator | Baseline | Candidate | Floor | No regression | Hard stop | Result |\n"
-            "|---|---|---|---|---|---|---|\n" + "\n".join(rows) +
-            "\n\n**Budget** (each query answered once more, end to end through the gateway)\n\n"
+            "|---|---|---|---|---|---|---|\n" + "\n".join(rows)
+            + "".join(f"\n\n**Why {role} items weren't scored:** " + ("; ".join(f"`{m}`" for m in msgs) or
+                      "no error message in the output items; open the report") for role, msgs in why.items())
+            + "\n\n**Budget** (each query answered once more, end to end through the gateway)\n\n"
             "| Measure | Baseline | Candidate | Check |\n|---|---|---|---|\n" + "\n".join(brows) +
             f"\n\n**Verdict: {'PASS' if verdict else 'FAIL'}**"
             + ("" if verdict else ": the candidate stays in INTAKE; no project is notified."))
