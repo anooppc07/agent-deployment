@@ -55,6 +55,8 @@ run "creates_the_foundry_project" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
           { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
@@ -85,6 +87,8 @@ run "builds_connection_and_policy_from_registry" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"model-acct-gpt-5-mini\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks-model-gpt-5-mini\",\"model\":\"gpt-5-mini\",\"version\":\"2026-03-17\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
           { name = "model-limit-other-gpt-5-mini", properties = { value = "{\"project\":\"other\",\"model\":\"gpt-5-mini\",\"tokens_per_minute\":100000,\"tokens_per_day\":1000000}" } },
         ]
       }
@@ -113,8 +117,16 @@ run "builds_connection_and_policy_from_registry" {
     error_message = "Policy should include the shared fragments."
   }
   assert {
-    condition     = !strcontains(azurerm_api_management_api_policy.models.xml_content, "name=\"cs-")
-    error_message = "models-demo sets no content_safety: every setting is left to the fragment's platform default."
+    condition     = !strcontains(regex("(?s)&quot;gpt-5-mini&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "name=\"cs-")
+    error_message = "models-demo sets no content_safety: gpt-5-mini's settings are left to the fragment's platform default."
+  }
+  assert {
+    condition     = strcontains(regex("(?s)&quot;gpt-5.1&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "name=\"cs-prompt-shields\" value=\"@(false)\"")
+    error_message = "A judge model (registry purpose: judge) gets Prompt Shields off; nothing else changes."
+  }
+  assert {
+    condition     = azurerm_api_management_named_value.status["gpt-5.4-mini"].value == "evaluating" && azurerm_api_management_named_value.status["gpt-5-mini"].value == "available"
+    error_message = "Each allowed model's project status is on the gateway (model-status-<project>-<model>): evaluating or available."
   }
 }
 
@@ -133,6 +145,8 @@ run "resolves_content_safety_per_model" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
           { name = "model-meta-gpt-x", properties = { value = "{\"name\":\"gpt-x\",\"backend_id\":\"bx\",\"deployment\":\"gpt-x\",\"kill_switch\":\"ksx\",\"model\":\"gpt-x\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
         ]
       }
@@ -190,6 +204,8 @@ run "rejects_two_projects_naming_one_foundry_project" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
         ]
       }
     }
@@ -212,6 +228,8 @@ run "rejects_when_shared_fragments_are_missing" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
         ]
       }
     }
@@ -241,6 +259,8 @@ run "rejects_over_capacity" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
           { name = "model-limit-other-gpt-5-mini", properties = { value = "{\"project\":\"other\",\"model\":\"gpt-5-mini\",\"tokens_per_minute\":240000,\"tokens_per_day\":1000000}" } },
         ]
       }
@@ -265,6 +285,8 @@ run "connects_a_tool_from_the_registry" {
       output = {
         value = [
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
           { name = "tool-meta-kb-owner-kb-search", properties = { value = "{\"project\":\"kb-owner\",\"name\":\"kb-search\",\"endpoint\":\"https://apim.azure-api.net/tools/kb-owner/kb-search/mcp\",\"foundry_projects\":[\"kb-foundry\",\"tool-user\"],\"tools\":[{\"name\":\"kb_search\",\"impact\":\"read\"}]}" } },
         ]
       }
@@ -295,6 +317,8 @@ run "rejects_a_tool_not_shared_with_the_project" {
       output = {
         value = [
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
           { name = "tool-meta-kb-owner-kb-search", properties = { value = "{\"project\":\"kb-owner\",\"name\":\"kb-search\",\"endpoint\":\"https://apim.azure-api.net/tools/kb-owner/kb-search/mcp\",\"foundry_projects\":[\"kb-foundry\"],\"tools\":[{\"name\":\"kb_search\",\"impact\":\"read\"}]}" } },
         ]
       }
@@ -318,6 +342,8 @@ run "rejects_a_tool_not_published" {
       output = {
         value = [
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
         ]
       }
     }
@@ -336,6 +362,8 @@ run "connects_its_own_tool" {
         value = [
           { name = "tool-meta-models-demo-ms-learn", properties = { value = "{\"project\":\"models-demo\",\"name\":\"ms-learn\",\"endpoint\":\"https://apim.azure-api.net/tools/models-demo/ms-learn/mcp\",\"foundry_projects\":[\"models-demo\"],\"tools\":[{\"name\":\"microsoft_docs_search\",\"impact\":\"read\"}]}" } },
           { name = "model-meta-gpt-5-mini", properties = { value = "{\"name\":\"gpt-5-mini\",\"backend_id\":\"b\",\"deployment\":\"gpt-5-mini\",\"kill_switch\":\"ks\",\"model\":\"gpt-5-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":250000}" } },
+          { name = "model-meta-gpt-5-4-mini", properties = { value = "{\"name\":\"gpt-5.4-mini\",\"backend_id\":\"b4\",\"deployment\":\"gpt-5.4-mini\",\"kill_switch\":\"ks4\",\"model\":\"gpt-5.4-mini\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":20000}" } },
+          { name = "model-meta-gpt-5-1", properties = { value = "{\"name\":\"gpt-5.1\",\"backend_id\":\"bj\",\"deployment\":\"gpt-5.1\",\"kill_switch\":\"ksj\",\"model\":\"gpt-5.1\",\"version\":\"v\",\"format\":\"OpenAI\",\"capacity_tpm\":150000,\"purpose\":\"judge\"}" } },
         ]
       }
     }
