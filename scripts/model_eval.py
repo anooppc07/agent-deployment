@@ -10,9 +10,10 @@ the queries scored (pack setting, default 1.0: every query; an item with an eval
   floors         candidate pass rate per evaluator >= its floor
   hard stops     listed evaluators pass every item
   no regression  candidate pass rate >= baseline pass rate - margin (non-inferiority), per evaluator
-  budget         each probe answers the pack's queries once more, through the gateway: p95 latency, average tokens
-                 per answer and, when the pack lists prices, average cost per answer, each within the pack's ratio
-                 of the baseline's (budget: max_latency_p95_ratio, max_tokens_ratio, max_cost_ratio, prices)
+  budget         from the scored runs, as the Foundry report shows them: p95 target latency, tokens per answer and
+                 cost per answer (Foundry's estimate, else the pack's prices), each within the pack's ratio of the
+                 baseline's (budget: max_latency_p95_ratio, max_tokens_ratio, max_cost_ratio, prices). If Foundry
+                 reports no latency, both probes are measured by the pipeline instead, one query at a time.
 The judge is a setting: the pack's judge_model, else the GitHub variable EVAL_JUDGE_MODEL (a gateway model name).
 Each run records the pack version, dataset hash, judge, models and commit, in Foundry (run metadata) and in
 .pipeline/model-eval.json (uploaded as a workflow artifact).
@@ -132,8 +133,10 @@ def errors(oai, definition, r, limit=3):
                 for res in (getattr(item, "results", None) or []):
                     d = res if isinstance(res, dict) else (res.model_dump() if hasattr(res, "model_dump") else vars(res))
                     if d.get("passed") is None:
-                        msg = f"{d.get('name', '?')}: " + json.dumps({k: v for k, v in d.items() if k != "name"},
-                                                                    default=str)[:200]
+                        err = ((d.get("sample") or {}).get("error") or {})
+                        text = err.get("message") or json.dumps({k: v for k, v in d.items() if k != "name"}, default=str)
+                        print(f"  unscored item, {d.get('name', '?')}: {text[:1000]}")   # whole message in the job log
+                        msg = f"{d.get('name', '?')}: {text[:600]}"
                         break
             if msg:
                 out.append(str(msg)[:160])
@@ -169,6 +172,42 @@ def measure(oai, model, version, pack):
     return {"latency_p95_s": round(p95, 2), "latency_avg_s": round(sum(lat) / len(lat), 2),
             "tokens_avg": round(avg_tokens, 1), "measured_tokens": all(tokens),
             "cost_avg_usd": round(avg_tokens * price / 1e6, 6) if price is not None else None}
+
+
+def as_dict(x):
+    return x if isinstance(x, dict) else (x.model_dump() if hasattr(x, "model_dump") else vars(x))
+
+
+def foundry_budget(oai, definition, r, pack, model):
+    """Budget from the scored run itself, as the Foundry report shows it: target latency (latency.target, p50/p95 in
+    ms) and tokens per answer (each item's sample.usage). None when Foundry reports no latency for the run."""
+    d = as_dict(r)
+    lat = ((d.get("latency") or {}).get("target")) or {}
+    if lat.get("p95_ms") is None:
+        return None
+    tokens = []
+    try:
+        for item in oai.evals.runs.output_items.list(run_id=r.id, eval_id=definition.id, limit=100):
+            u = as_dict(getattr(item, "sample", None) or {}).get("usage") or {}
+            u = as_dict(u) if not isinstance(u, dict) else u
+            t = u.get("total_tokens") or ((u.get("prompt_tokens") or 0) + (u.get("completion_tokens") or 0))
+            if t:
+                tokens.append(t)
+    except Exception as e:  # tokens are optional; latency alone still decides the latency check
+        print(f"  (token usage not read from output items: {e})")
+    cost = ((d.get("estimated_cost") or {}).get("target")) or {}
+    price = ((pack.get("budget") or {}).get("prices") or {}).get(model)
+    avg_tokens = round(sum(tokens) / len(tokens), 1) if tokens else None
+    if cost.get("estimated_cost") is not None and lat.get("sample_count"):
+        cost_avg = round(float(cost["estimated_cost"]) / int(lat["sample_count"]), 6)
+    elif price is not None and avg_tokens is not None:
+        cost_avg = round(avg_tokens * price / 1e6, 6)
+    else:
+        cost_avg = None
+    return {"source": "Foundry evaluation run", "latency_p95_s": round(lat["p95_ms"] / 1000, 2),
+            "latency_p50_s": round((lat.get("p50_ms") or 0) / 1000, 2), "latency_samples": lat.get("sample_count"),
+            "tokens_avg": avg_tokens, "measured_tokens": bool(tokens) and len(tokens) == len(pack["dataset"]),
+            "cost_avg_usd": cost_avg}
 
 
 def budget_rows(pack, base, cand):
@@ -261,8 +300,13 @@ def run(path):
 
     why = {role: errors(oai, definition, done[role]) for role in sorted(incomplete)}
 
-    perf = {role: measure(oai, model, versions[model], pack)
+    # Budget from the scored runs (the numbers the Foundry report shows). Only when Foundry reports no latency for a
+    # run does the pipeline measure both models itself, one query at a time, so both always come from one source.
+    perf = {role: foundry_budget(oai, definition, done[role], pack, model)
             for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"]))}
+    if any(v is None for v in perf.values()):
+        perf = {role: dict(measure(oai, model, versions[model], pack), source="pipeline, one query at a time")
+                for role, model in (("baseline", pack["baseline"]), ("candidate", pack["candidate"]))}
     brows, budget_ok = budget_rows(pack, perf["baseline"], perf["candidate"])
     verdict = verdict and budget_ok
 
@@ -282,9 +326,9 @@ def run(path):
             f"judge `{pack['judge']}` · margin {margin:.0%} · {links}\n\n"
             "| Evaluator | Baseline | Candidate | Floor | No regression | Hard stop | Result |\n"
             "|---|---|---|---|---|---|---|\n" + "\n".join(rows)
-            + "".join(f"\n\n**Why {role} items weren't scored:** " + ("; ".join(f"`{m}`" for m in msgs) or
+            + "".join(f"\n\n**Why {role} items weren't scored:**\n" + ("\n".join(f"- {m}" for m in msgs) or
                       "no error message in the output items; open the report") for role, msgs in why.items())
-            + "\n\n**Budget** (each query answered once more, end to end through the gateway)\n\n"
+            + f"\n\n**Budget** (source: {perf['baseline']['source']})\n\n"
             "| Measure | Baseline | Candidate | Check |\n|---|---|---|---|\n" + "\n".join(brows) +
             f"\n\n**Verdict: {'PASS' if verdict else 'FAIL'}**"
             + ("" if verdict else ": the candidate stays in INTAKE; no project is notified."))
