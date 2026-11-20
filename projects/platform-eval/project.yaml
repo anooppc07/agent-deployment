@@ -1,0 +1,31 @@
+# Platform evaluation project (test bed G4): owned by the platform team, not a use case. The model-evaluation
+# pipeline creates one probe agent per model here (neutral instructions, no tools) and compares a candidate model
+# against the serving baseline on the same pack and judge, through the gateway like any project. No agents/ folder:
+# agent-deploy skips it.
+name: platform-eval
+display_name: Platform model evaluation
+owner: ai-platform-team
+platform_evaluation: true                  # no agents/ folder: probe agents are created by model-evaluation
+foundry:
+  project: platform-eval
+
+gateway:
+  path: ai/platform-eval
+  product: agents-test
+  rate_limit_per_minute: 60
+  quota_per_day: 2000
+
+docs_file: project.md
+
+models:
+  connection: platform-eval-models         # unique in the agent account (models-demo has platform-models)
+  allowed:
+    - name: gpt-5-mini                     # model A, the baseline
+      tokens_per_minute: 10000
+      tokens_per_day: 200000
+    - name: gpt-5.4-mini                   # model B, the candidate (only this project may call it before approval)
+      tokens_per_minute: 10000
+      tokens_per_day: 200000
+    - name: gpt-5.1                        # the judge (EVAL_JUDGE_MODEL)
+      tokens_per_minute: 20000
+      tokens_per_day: 400000

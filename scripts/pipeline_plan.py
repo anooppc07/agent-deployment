@@ -57,6 +57,8 @@ def entries(kind, files, envs):
     else:
         names = [p for p in envs if everything or any(
             f.startswith(f"projects/{p}/") and not f.startswith(f"projects/{p}/tools/") for f in files)]
+        # A project without agents (for example the platform evaluation project) has nothing to release.
+        names = [p for p in names if glob.glob(f"projects/{p}/agents/*/agent.yaml", root_dir=ROOT)]
     return [{"project": p} for p in names]
 
 
