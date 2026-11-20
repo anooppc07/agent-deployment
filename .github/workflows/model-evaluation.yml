@@ -55,6 +55,7 @@ jobs:
           name: model-eval-${{ inputs.pack }}
           path: .pipeline/model-eval.json
           if-no-files-found: ignore
+          include-hidden-files: true   # .pipeline/ is a hidden folder: upload-artifact skips those by default
 
   approve:
     needs: evaluate

@@ -8,7 +8,8 @@ One Foundry project = one APIM API (path from project.yaml); each agent in the p
 
   agent_pipeline.py validate [project ...]   offline checks of projects/<project>/ (no Azure access)
   agent_pipeline.py deploy   <project>       create a new Foundry version for each agent whose definition changed
-  agent_pipeline.py evaluate <project>       Foundry evaluation of each new version; fails the run below the threshold
+  agent_pipeline.py evaluate <project>       Foundry evaluation of each new version, compared with the serving version
+  agent_pipeline.py verdict <project>        release table, issue comment; fails if an agent was kept on its version
   agent_pipeline.py register <project>       named values (incl. pinned version), project API, policies, product, portal
   agent_pipeline.py smoke    <project>       run every agent's tests.yaml through the gateway
   agent_pipeline.py evaluate-versions <project> <agent> <version> ...   compare versions (no gateway change)
@@ -614,6 +615,9 @@ def validate(names):
                 if not 0 < float(ev.get("min_pass_rate", 0)) <= 1 or not ev.get("judge_model"):
                     errors.append(f"{n}/{an}: min_pass_rate (0-1] is required, and a judge: judge_model, or the "
                                   "platform default (variable EVAL_JUDGE_MODEL)")
+                if not 0 <= float(ev.get("margin", 0.10)) < 1:
+                    errors.append(f"{n}/{an}: margin (optional) is how far below the serving version's pass rate a new "
+                                  "version may score, [0-1)")
                 if not 0 < float(ev.get("min_coverage", 1.0)) <= 1:
                     errors.append(f"{n}/{an}: min_coverage (optional) is the share of queries that must be scored, (0-1]")
         errors += validate_models(n, p)
@@ -802,8 +806,8 @@ def gate_evaluation(oai, a):
         testing_criteria=criteria)
 
 
-def run_gate(oai, a, version):
-    """Evaluate one agent version; returns (passed, scores, report_url)."""
+def run_gate(oai, a, version, label=""):
+    """Evaluate one agent version; returns (passed, scores, report_url). label marks a comparison run in the summary."""
     ev = a["evals"]
     definition = gate_evaluation(oai, a)
     dataset_sha = hashlib.sha256(json.dumps(ev["dataset"], sort_keys=True).encode()).hexdigest()[:12]
@@ -843,29 +847,78 @@ def run_gate(oai, a, version):
         print(f"{a['name']} v{version}: not every query was scored: {unscored}")
     report = getattr(r, "report_url", None)
     line = ", ".join(f"{k} {s['passed']}/{s['total']}" for k, s in scores.items()) or f"status {r.status}"
-    summary(f"**{a['name']} v{version}** evaluation {'PASSED' if ok else 'FAILED'} "
+    summary(f"**{a['name']} v{version}**{label} evaluation {'PASSED' if ok else 'FAILED'} "
             f"(min pass rate {ev['min_pass_rate']:.0%}): {line}" + (f" · [report]({report})" if report else ""))
     return ok, scores, report
 
 
+def model_of(a):
+    """The gateway model name an agent uses (agent.yaml model: <connection>/<model>)."""
+    return (a.get("model") or "").split("/", 1)[-1]
+
+
+def model_status(project, model):
+    """The project's status for a model on the gateway (named value model-status-<project>-<model>, written by
+    onboarding from project.yaml): available or evaluating. Projects onboarded before statuses existed: available."""
+    r = arm("POST", f"namedValues/model-status-{project}-{model.replace('.', '-')}/listValue", ok=(200, 404))
+    return r.json()["value"] if r.status_code == 200 else "available"
+
+
+def compare(ev, new, current):
+    """P5: the new version must not be clearly worse than the version the gateway serves, on the same queries and judge:
+    per evaluator, new pass rate >= current pass rate - margin (evals.yaml margin, default 0.10)."""
+    margin = float(ev.get("margin", 0.10))
+    rows, ok = [], True
+    for e in ev["evaluators"]:
+        n, c = new.get(e), current.get(e)
+        if n is None or c is None:
+            rows.append(f"| {e} | {c and c['rate']} | {n and n['rate']} | no result |")
+            ok = False
+            continue
+        good = n["rate"] >= c["rate"] - margin
+        ok = ok and good
+        rows.append(f"| {e} | {c['passed']}/{c['total']} ({c['rate']:.0%}) | {n['passed']}/{n['total']} ({n['rate']:.0%}) "
+                    f"| {'ok' if good else 'FAIL'} (≥ {c['rate'] - margin:.0%}) |")
+    return ok, rows, margin
+
+
 def evaluate(name):
+    """Evaluate every new agent version (floor, coverage) and compare it with the version the gateway serves (P5).
+    Doesn't stop at a failed agent (P2): register pins each agent on its own result. Writes needs_approval to the step
+    output: true when a passing version would move an agent onto a model this project is still evaluating (P4)."""
     from azure.ai.projects import AIProjectClient
     p = load_project(name)
     versions = load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
     oai = AIProjectClient(endpoint=p["foundry_project_endpoint"], credential=cred).get_openai_client()
-    results, failed = {}, []
+    results, needs_approval = {}, False
     for a in p["agents"]:
         v = versions[a["name"]]
         if not v["new"]:
             print(f"{a['name']}: version {v['version']} already approved, evaluation not needed")
             continue
+        status = model_status(name, model_of(a))
         ok, scores, report = run_gate(oai, a, v["version"])
-        results[a["name"]] = {"version": v["version"], "passed": ok, "scores": scores, "report": report}
-        if not ok:
-            failed.append(a["name"])
+        served = served_version(a["name"])
+        cmp = None
+        if served and served != v["version"]:
+            _, current, current_report = run_gate(oai, a, served, label=" (serving, for comparison)")
+            better, rows, margin = compare(a["evals"], scores, current)
+            summary(f"**{a['name']}**: v{v['version']} against the serving v{served} (same queries and judge, margin "
+                    f"{margin:.0%}): {'no regression' if better else 'REGRESSION'}\n\n"
+                    "| Evaluator | Serving | New | No regression |\n|---|---|---|---|\n" + "\n".join(rows))
+            cmp = {"serving_version": served, "serving_scores": current, "serving_report": current_report,
+                   "no_regression": better, "margin": margin}
+            ok = ok and better
+        results[a["name"]] = {"version": v["version"], "passed": ok, "scores": scores, "report": report,
+                              "model": model_of(a), "model_status": status, "comparison": cmp}
+        needs_approval = needs_approval or (ok and status == "evaluating")
     save_state(name, "evals", results)
+    if os.environ.get("GITHUB_OUTPUT"):
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"needs_approval={'true' if needs_approval else 'false'}\n")
+    failed = [n for n, r in results.items() if not r["passed"]]
     if failed:
-        sys.exit(f"Evaluation gate failed for: {', '.join(failed)}. The gateway keeps serving the previous versions.")
+        print(f"Evaluation failed for: {', '.join(failed)}. They keep their current version; register pins the others.")
 
 
 # ----------------------------------------------------------------------------- APIM (ARM REST)
@@ -1015,24 +1068,47 @@ def register(name):
     api_id = f"project-{name}"
     print(f"Registering project {name} in APIM {env('APIM_NAME')} as API {api_id}")
     require_fragments("project-policy.xml", "agent-operation-policy.xml")
-    versions =load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
+    versions = load_state(name, "versions") or sys.exit("Run deploy first: no versions recorded for this run")
     evals = load_state(name, "evals") or {}
+    approved = os.environ.get("AGENT_APPROVAL") == "approved"   # set by the workflow when the approve job succeeded
+    # P2: each agent is pinned, or kept on its current version, on its own result; one failure doesn't stop the rest.
+    # P3 (pin lock): a version on a model this project is still evaluating is pinned only if it passed in this run
+    # and the release was approved.
+    outcome, live = {}, []
     for a in p["agents"]:
         v = versions[a["name"]]
-        if v["new"] and not (evals.get(a["name"]) or {}).get("passed"):
-            sys.exit(f"{a['name']} v{v['version']} has not passed evaluation in this run; not switching the gateway")
+        served = served_version(a["name"])
+        if v["new"]:
+            r = evals.get(a["name"]) or {}
+            status = r.get("model_status") or model_status(name, model_of(a))
+            if not r.get("passed"):
+                reason = "failed evaluation"
+            elif status == "evaluating" and not approved:
+                reason = f"pin lock: {r.get('model') or model_of(a)} is evaluating for {name} and the release wasn't approved"
+            else:
+                reason = None
+            if reason:
+                outcome[a["name"]] = {"version": v["version"], "pinned": served, "moved": False, "reason": reason}
+                print(f"  {a['name']}: v{v['version']} not pinned ({reason}); the gateway keeps v{served or ' none'}")
+                if served:
+                    live.append(a)
+                continue
         if a["kind"] == "hosted":   # the hosted endpoint takes no version in the request: pin it in Foundry
             pin_endpoint(p, a["name"], v["version"])
         put_named_value(f"agent-name-{a['name']}", a["name"])
         put_named_value(f"agent-version-{a['name']}", v["version"])                # the version the gateway serves
         put_named_value(f"ks-agent-{a['name']}", "active", only_if_missing=True)   # never re-enable a suspended agent
+        outcome[a["name"]] = {"version": v["version"], "pinned": v["version"], "moved": v["new"] and served != v["version"],
+                              "reason": None}
+        live.append(a)
+    save_state(name, "register", outcome)
 
     arm("PUT", f"apis/{api_id}", {"properties": {
         "displayName": f"AI project - {p['display_name']}", "description": p["docs"], "path": g["path"],
         "protocols": ["https"], "subscriptionRequired": True, "serviceUrl": p["foundry_project_endpoint"]}})
     wait_for(f"apis/{api_id}")
     # One operation per agent and method, on /<agent>/*: the caller's Foundry path follows (fragment agent-route).
-    wanted = {f"{a['name']}-{m.lower()}": (a, m) for a in p["agents"] for m in METHODS}
+    wanted = {f"{a['name']}-{m.lower()}": (a, m) for a in live for m in METHODS}   # agents with a version to serve
     for op in arm("GET", f"apis/{api_id}/operations").json().get("value", []):
         if op["name"] not in wanted:   # an operation of an agent removed from the project, or of another layout
             arm("DELETE", f"apis/{api_id}/operations/{op['name']}")
@@ -1041,7 +1117,7 @@ def register(name):
         arm("PUT", f"apis/{api_id}/operations/{op_id}", {"properties": {
             "displayName": f"{a['display_name']} ({m})", "method": m, "urlTemplate": f"/{a['name']}/*",
             "description": agent_operation_doc(p, a)}})
-    print(f"  API {api_id} at /{g['path']}: {len(wanted)} operation(s), {len(p['agents'])} agent(s)")
+    print(f"  API {api_id} at /{g['path']}: {len(wanted)} operation(s), {len(live)} agent(s) served")
 
     arm("PUT", f"apis/{api_id}/policies/policy", {"properties": {"format": "rawxml", "value": template(
         "project-policy.xml", RATE=g["rate_limit_per_minute"], QUOTA=g["quota_per_day"])}})
@@ -1061,6 +1137,53 @@ def register(name):
     base = f"https://{env('APIM_NAME')}.azure-api.net/{g['path']}"
     summary(f"**{name}**: API `{base}/<agent>/` + the agent's Foundry path · docs "
             f"https://{env('APIM_NAME')}.developer.azure-api.net/api-details#api={api_id}")
+
+
+def verdict(name):
+    """Last step: one table per release, and a comment on the project's open model-evaluation issue (P6). Fails the run
+    when an agent was kept on its current version, after the others were pinned and smoke-tested."""
+    evals = load_state(name, "evals") or {}
+    outcome = load_state(name, "register") or {}
+    rows, held = [], []
+    for agent, o in outcome.items():
+        r = evals.get(agent) or {}
+        if o["moved"]:
+            result = f"moved to v{o['version']}"
+        elif o["reason"]:
+            result = f"kept on v{o['pinned'] or ' none'}: {o['reason']}"
+            held.append(agent)
+        else:
+            result = f"v{o['version']} (unchanged)"
+        cmp = r.get("comparison") or {}
+        vs = f"v{cmp['serving_version']}: {'no regression' if cmp.get('no_regression') else 'regression'}" if cmp else ""
+        model = f"{r['model']} ({r['model_status']})" if r.get("model") else "unchanged"
+        rows.append(f"| {agent} | {model} | {vs or '-'} | {result} |")
+    table = ("| Agent | Model (project status) | Against serving | Result |\n|---|---|---|---|\n" + "\n".join(rows)
+             if rows else "No agent changed.")
+    summary(f"### Release of {name}\n\n{table}")
+    issue_comment(name, evals, table)
+    if held:
+        sys.exit(f"Kept on their current version: {', '.join(held)} (see the table). The other agents were pinned.")
+
+
+def issue_comment(name, evals, table):
+    """Comment on the open issue "Evaluate model <m> for project <name>" for each model an agent was evaluated on."""
+    repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
+    if not repo or not token:
+        return
+    headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
+    r = requests.get(f"https://api.github.com/repos/{repo}/issues", headers=headers,
+                     params={"state": "open", "per_page": 100}, timeout=30)
+    if r.status_code != 200:
+        print(f"  (issues not read: HTTP {r.status_code})")
+        return
+    run = f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{repo}/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}"
+    for model in sorted({e.get("model") for e in evals.values() if e.get("model_status") == "evaluating"}):
+        for i in r.json():
+            if "pull_request" not in i and i["title"] == f"Evaluate model {model} for project {name}":
+                requests.post(i["comments_url"], headers=headers, timeout=30,
+                              json={"body": f"Agent release [{os.environ.get('GITHUB_SHA', '')[:7]}]({run}):\n\n{table}"})
+                print(f"  commented on issue #{i['number']}")
 
 
 # ----------------------------------------------------------------------------- smoke test through the gateway
@@ -1090,6 +1213,9 @@ def smoke(name):
         return
     failures, ran = [], 0
     for a in p["agents"]:
+        if not served_version(a["name"]):
+            summary(f"**{a['name']}**: not served yet (no version passed), smoke test skipped")
+            continue
         ks = arm("POST", f"namedValues/ks-agent-{a['name']}/listValue").json()["value"]
         if ks.lower() != "active":
             summary(f"**{a['name']}**: kill switch is '{ks}', smoke test skipped")
@@ -1137,7 +1263,7 @@ if __name__ == "__main__":
         client = AIProjectClient(endpoint=proj["foundry_project_endpoint"], credential=cred).get_openai_client()
         for ver in args[2:]:
             run_gate(client, agent, ver)
-    elif cmd in ("deploy", "evaluate", "register", "smoke"):
-        {"deploy": deploy, "evaluate": evaluate, "register": register, "smoke": smoke}[cmd](args[0])
+    elif cmd in ("deploy", "evaluate", "register", "smoke", "verdict"):
+        {"deploy": deploy, "evaluate": evaluate, "register": register, "smoke": smoke, "verdict": verdict}[cmd](args[0])
     else:
         sys.exit(__doc__)
