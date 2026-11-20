@@ -1,9 +1,9 @@
-# Sandbox agent: uses the platform model gpt-5.4-mini through the project's AI Gateway connection.
+# Sandbox agent: uses the platform model gpt-5-mini through the project's AI Gateway connection.
 name: demo-assistant
 display_name: Demo assistant
 description: Answers short general questions, to test platform models through the gateway.
 owner: ai-platform-team
-model: platform-models/gpt-5.4-mini
+model: platform-models/gpt-5-mini
 instructions_file: instructions.md
 
 gateway:

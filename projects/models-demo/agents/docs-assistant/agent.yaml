@@ -4,7 +4,7 @@ name: docs-assistant
 display_name: Docs assistant
 description: Answers Azure and Microsoft questions from Microsoft Learn documentation, with links.
 owner: ai-platform-team
-model: platform-models/gpt-5.4-mini
+model: platform-models/gpt-5-mini
 instructions_file: instructions.md
 
 tools:
