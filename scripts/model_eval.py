@@ -125,9 +125,13 @@ def errors(oai, definition, r, limit=3):
             err = getattr(sample, "error", None) if sample is not None else None
             msg = (getattr(err, "message", None) or getattr(err, "code", None)) if err else None
             if not msg:
+                # An evaluator that errored on this item: its result has no pass or fail. Show it raw, whatever its shape.
                 for res in (getattr(item, "results", None) or []):
-                    if isinstance(res, dict) and res.get("passed") is None and res.get("sample", {}).get("error"):
-                        msg = str(res["sample"]["error"])
+                    d = res if isinstance(res, dict) else (res.model_dump() if hasattr(res, "model_dump") else vars(res))
+                    if d.get("passed") is None:
+                        msg = f"{d.get('name', '?')}: " + json.dumps({k: v for k, v in d.items() if k != "name"},
+                                                                    default=str)[:200]
+                        break
             if msg:
                 out.append(str(msg)[:160])
             if len(out) >= limit:
