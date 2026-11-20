@@ -21,6 +21,13 @@ models:
     - name: gpt-5-mini
       tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
       tokens_per_day: 500000
+    - name: gpt-5.4-mini                   # issue #9: approved by the platform; the project evaluates it first (P1)
+      status: evaluating                   # evaluation only: at most 5,000 TPM; agents move after passing and approval
+      tokens_per_minute: 5000
+      tokens_per_day: 100000
+    - name: gpt-5.1                        # the evaluation judge (EVAL_JUDGE_MODEL); Prompt Shields off at the gateway
+      tokens_per_minute: 30000
+      tokens_per_day: 600000
 
 # Tools this project's agents may use: <owner project>/<tool>, published by the owner's tool-deploy pipeline and shared
 # with this project's Foundry project. Use-case onboarding creates the connection.

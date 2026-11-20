@@ -23,6 +23,7 @@ on:
 permissions:
   id-token: write
   contents: read
+  issues: write   # _agents publish comments the release table on the project's model-evaluation issue
 
 concurrency:
   group: agent-deploy-${{ github.ref }}
