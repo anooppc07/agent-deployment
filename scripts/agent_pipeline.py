@@ -52,6 +52,8 @@ TOOL_APPROVALS = {"never", "always"}             # agent.yaml tools[].require_ap
 TOOL_AUTH = {"none", "managed_identity"}         # tool.yaml backend.auth (managed_identity: granted by the tool's team)
 TOOL_TEST_EXPECT = {"called", "refused"}         # tool tests.yaml expect
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+MODEL_STATUSES = ("available", "evaluating")     # project.yaml models.allowed[].status (P1)
+EVALUATING_TPM_CAP = 5000                        # keep in step with onboarding/terraform/locals.tf evaluating_tpm_cap
 ARM_API = "2022-08-01"
 cred = AzureCliCredential(process_timeout=60)
 
@@ -300,6 +302,12 @@ def load_project(name):
     p["tools_config"] = p.get("tools") or {}
     p["tools"] = project_tools(p, apim)
     p["agents"] = [load_agent(f, p) for f in sorted(glob.glob(os.path.join(folder, "agents", "*"))) if os.path.isdir(f)]
+    # Evaluation judge: the agent's evals.yaml judge_model, else the platform default (variable EVAL_JUDGE_MODEL, a
+    # gateway model name) through the project's own connection.
+    conn = (p.get("models") or {}).get("connection", "platform-models")
+    for a in p["agents"]:
+        if a.get("evals") and not a["evals"].get("judge_model") and os.environ.get("EVAL_JUDGE_MODEL"):
+            a["evals"]["judge_model"] = f"{conn}/{os.environ['EVAL_JUDGE_MODEL']}"
     return p
 
 
@@ -328,6 +336,12 @@ def validate_models(n, p):
         if not x.get("name") or not isinstance(tpm, int) or not isinstance(tpd, int) or tpm <= 0 or tpd < tpm:
             errors.append(f"{n}: models.allowed entry {x.get('name')!r} needs name, tokens_per_minute > 0 and "
                           "tokens_per_day >= tokens_per_minute")
+        st = x.get("status", "available")
+        if st not in MODEL_STATUSES:
+            errors.append(f"{n}: models.allowed[{x.get('name')}].status must be one of {list(MODEL_STATUSES)}")
+        elif st == "evaluating" and isinstance(tpm, int) and tpm > EVALUATING_TPM_CAP:
+            errors.append(f"{n}: models.allowed[{x.get('name')}] is evaluating: at most {EVALUATING_TPM_CAP} tokens per "
+                          "minute (evaluation only)")
     scopes = [("models.content_safety", m.get("content_safety"))] + [
         (f"models.allowed[{x.get('name')}].content_safety", x.get("content_safety")) for x in allowed]
     for scope, cs in scopes:
@@ -598,7 +612,8 @@ def validate(names):
                     errors.append(f"{n}/{an}: {sorted(INSTRUCTION_EVALUATORS)} judge against the agent's instructions:"
                                   " add instructions_file (for a hosted agent, the behaviour its code implements)")
                 if not 0 < float(ev.get("min_pass_rate", 0)) <= 1 or not ev.get("judge_model"):
-                    errors.append(f"{n}/{an}: judge_model and min_pass_rate (0-1] are required")
+                    errors.append(f"{n}/{an}: min_pass_rate (0-1] is required, and a judge: judge_model, or the "
+                                  "platform default (variable EVAL_JUDGE_MODEL)")
                 if not 0 < float(ev.get("min_coverage", 1.0)) <= 1:
                     errors.append(f"{n}/{an}: min_coverage (optional) is the share of queries that must be scored, (0-1]")
         errors += validate_models(n, p)

@@ -36,6 +36,12 @@ locals {
   ]
   allowed = { for m in try(local.project.models.allowed, []) : m.name => m }
 
+  # Project status per allowed model (P1): available (default), or evaluating while the project tests a newly approved
+  # model. Evaluating: the model joins the connection with at most evaluating_tpm_cap tokens per minute, and the agent
+  # pipeline pins an agent version on it only after that version passed and was approved (pin lock).
+  evaluating_tpm_cap = 5000
+  model_status       = { for n, m in local.allowed : n => try(m.status, "available") }
+
   foundry          = local.env.agents_foundry
   account_id       = "/subscriptions/${local.foundry.subscription_id}/resourceGroups/${local.foundry.resource_group}/providers/Microsoft.CognitiveServices/accounts/${local.foundry.account_name}"
   project_id       = "${local.account_id}/projects/${local.foundry_project}"
