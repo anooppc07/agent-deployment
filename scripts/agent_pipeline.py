@@ -907,7 +907,7 @@ def evaluate(name):
                     f"{margin:.0%}): {'no regression' if better else 'REGRESSION'}\n\n"
                     "| Evaluator | Serving | New | No regression |\n|---|---|---|---|\n" + "\n".join(rows))
             cmp = {"serving_version": served, "serving_scores": current, "serving_report": current_report,
-                   "no_regression": better, "margin": margin}
+                   "no_regression": better, "margin": margin, "rows": rows}
             ok = ok and better
         results[a["name"]] = {"version": v["version"], "passed": ok, "scores": scores, "report": report,
                               "model": model_of(a), "model_status": status, "comparison": cmp}
@@ -916,9 +916,45 @@ def evaluate(name):
     if os.environ.get("GITHUB_OUTPUT"):
         with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
             fh.write(f"needs_approval={'true' if needs_approval else 'false'}\n")
+    if needs_approval:
+        approval_evidence(name, p, results)
     failed = [n for n, r in results.items() if not r["passed"]]
     if failed:
         print(f"Evaluation failed for: {', '.join(failed)}. They keep their current version; register pins the others.")
+
+
+def approval_evidence(name, p, results):
+    """Before the approval wait: what the reviewer approves, per agent that would move onto an evaluating model:
+    scores of the new and the serving version, the comparison, the judge and the Foundry reports. Written to the
+    run summary, to .pipeline/approval.md (printed by the approve job) and as a comment on the project's open
+    model-evaluation issue."""
+    run = (f"{os.environ.get('GITHUB_SERVER_URL', 'https://github.com')}/{os.environ.get('GITHUB_REPOSITORY', '')}"
+           f"/actions/runs/{os.environ.get('GITHUB_RUN_ID', '')}")
+    parts = [f"### Approval needed: agents of {name} moving onto a model the project is evaluating",
+             f"Run: {run}"]
+    for agent, r in results.items():
+        if not (r["passed"] and r["model_status"] == "evaluating"):
+            continue
+        a = next(x for x in p["agents"] if x["name"] == agent)
+        c = r.get("comparison") or {}
+        links = " · ".join(x for x in (f"[v{r['version']} report]({r['report']})" if r.get("report") else "",
+                                       f"[v{c['serving_version']} report]({c['serving_report']})" if c.get("serving_report") else "") if x)
+        parts.append(f"**{agent}**: v{r['version']} on `{r['model']}` (evaluating) against the serving "
+                     f"v{c.get('serving_version', 'none')} · judge `{a['evals']['judge_model']}` · "
+                     f"{len(a['evals']['dataset'])} queries · margin {c.get('margin', 0):.0%} · {links}")
+        if c.get("rows"):
+            parts.append("| Evaluator | Serving | New | No regression |\n|---|---|---|---|\n" + "\n".join(c["rows"]))
+        else:
+            parts.append("No serving version to compare with: first release of this agent. Scores: " +
+                         ", ".join(f"{k} {v['passed']}/{v['total']}" for k, v in r["scores"].items()))
+    parts.append("Approve in the run (Review deployments → agent-approval) to pin these versions; reject to keep the "
+                 "serving versions.")
+    text = "\n\n".join(parts)
+    summary(text)
+    os.makedirs(STATE, exist_ok=True)
+    with open(os.path.join(STATE, "approval.md"), "w", encoding="utf-8") as fh:
+        fh.write(text + "\n")
+    issue_comment(name, results, text, raw=True)
 
 
 # ----------------------------------------------------------------------------- APIM (ARM REST)
@@ -1166,8 +1202,9 @@ def verdict(name):
         sys.exit(f"Kept on their current version: {', '.join(held)} (see the table). The other agents were pinned.")
 
 
-def issue_comment(name, evals, table):
-    """Comment on the open issue "Evaluate model <m> for project <name>" for each model an agent was evaluated on."""
+def issue_comment(name, evals, table, raw=False):
+    """Comment on the open issue "Evaluate model <m> for project <name>" for each model an agent was evaluated on.
+    raw: post the text as it is (the approval evidence), not as a release table."""
     repo, token = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_TOKEN")
     if not repo or not token:
         return
@@ -1182,7 +1219,8 @@ def issue_comment(name, evals, table):
         for i in r.json():
             if "pull_request" not in i and i["title"] == f"Evaluate model {model} for project {name}":
                 requests.post(i["comments_url"], headers=headers, timeout=30,
-                              json={"body": f"Agent release [{os.environ.get('GITHUB_SHA', '')[:7]}]({run}):\n\n{table}"})
+                              json={"body": table if raw else
+                                    f"Agent release [{os.environ.get('GITHUB_SHA', '')[:7]}]({run}):\n\n{table}"})
                 print(f"  commented on issue #{i['number']}")
 
 

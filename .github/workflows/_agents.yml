@@ -33,7 +33,12 @@ jobs:
       cancel-in-progress: false
     outputs:
       needs_approval: ${{ steps.evaluate.outputs.needs_approval }}
+    permissions:
+      id-token: write
+      contents: read
+      issues: write   # the approval evidence goes on the project's model-evaluation issue before the wait
     env:
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
       ACR_NAME: ${{ vars.ACR_NAME }}                   # container registry for hosted agents' images
@@ -94,8 +99,14 @@ jobs:
             *,required_reviewers,*) ;;
             *) echo "::error::Environment agent-approval has no required reviewers, so this run wasn't approved by a person. Settings > Environments > agent-approval > Required reviewers, then re-run."; exit 1 ;;
           esac
-      - run: |
-          echo "### Approved: agents of ${{ inputs.project }} may move onto the model they were evaluated on" >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/download-artifact@v4
+        with:
+          name: agents-${{ inputs.project }}-${{ inputs.environment }}
+          path: .pipeline/
+      - name: What was approved (evaluation evidence)
+        run: |
+          cat .pipeline/approval.md
+          { cat .pipeline/approval.md; echo; echo "### Approved: agents of ${{ inputs.project }} may move onto the model they were evaluated on"; } >> "$GITHUB_STEP_SUMMARY"
 
   publish:
     needs: [release, approve]
