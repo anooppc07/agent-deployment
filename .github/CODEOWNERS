@@ -1,0 +1,23 @@
+# Who must approve a change to main. Branch protection: "Require review from Code Owners" and the required check
+# separation-of-duties (scripts/approval_check.py: an owner other than the author or committers approves, on the
+# current commit). The last matching line wins.
+#
+# Test bed: one account stands in for every team, so one approval covers all roles. In the bank, use teams:
+#   AI platform        @<org>/ai-platform            pipelines, checks, templates, onboarding; each project's access
+#                                                    to models and tools (project.yaml)
+#   Use-case owner     @<org>/<project>-owners       the project's agents, tools and evaluations
+# (Team owners need the check's token to read team membership: a GitHub App token, not the workflow token.)
+
+*                                   @dreadnaught07
+
+# Use-case owners: their agents, tools, evaluation sets and docs.
+/projects/models-demo/              @dreadnaught07
+
+# AI platform: what a project may use (models, capacity, tools), and the pipelines and checks themselves.
+/projects/*/project.yaml            @dreadnaught07
+/projects/platform-eval/            @dreadnaught07
+/.github/                           @dreadnaught07
+/scripts/                           @dreadnaught07
+/onboarding/                        @dreadnaught07
+/templates/                         @dreadnaught07
+/tool-deploy/                       @dreadnaught07

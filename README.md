@@ -20,6 +20,14 @@ Azure with GitHub OIDC (no secrets).
 | **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, product; Developer Portal; smoke tests through the gateway | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
 | `ci` | checks on every pull request and merge, no Azure: every definition valid, hosted agents compile, Terraform plan tests | — | — | — |
 
+**Approvals.** Every change to `main` is a pull request approved by its code owners (`.github/CODEOWNERS`): the
+AI platform for what a project may use (`project.yaml`) and for the pipelines; the use-case owner for the project's
+agents and evaluations. The required check `separation-of-duties` (`scripts/approval_check.py`) passes only when each
+changed file is approved, on the current commit, by an owner who isn't the author or a committer. Branch protection
+on `main`: pull request with 1 approval, Code Owners review, dismiss stale approvals, required check
+`separation-of-duties`, no bypassing. Agent pins onto a model the project is evaluating keep their environment
+approval (`agent-approval`): that approval gates a deployment, not a decision.
+
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 
 ```
