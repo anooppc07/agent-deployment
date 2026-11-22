@@ -1,0 +1,57 @@
+# Required check on main: every changed file is approved by a code owner who didn't ask for, open or write the change,
+# on the pull request's current commit (scripts/approval_check.py). Make it required in branch protection (check name
+# separation-of-duties), with "Require review from Code Owners" and "Dismiss stale approvals".
+#
+# A pull request opened or updated by the workflow token (the intake) doesn't start workflows, so this check first
+# runs when a reviewer submits a review. Until then the required check is missing and the pull request can't merge.
+#
+# The check and CODEOWNERS are read from the base branch, not from the pull request, so a change can't loosen the
+# rule that approves it.
+#
+# The result is a commit status (context separation-of-duties) on the pull request's head commit, not the job's own
+# result: the check runs on several events (opened, each review), and GitHub would keep a failed run from before the
+# approval next to the passing one and block the merge. A commit status has one value per commit: the latest wins.
+name: separation-of-duties
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  pull_request_review:
+    types: [submitted, dismissed, edited]
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: read
+  statuses: write   # the result, as the commit status separation-of-duties
+
+concurrency:
+  group: separation-of-duties-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail
+
+jobs:
+  approval-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Approved by an owner who isn't the requester, author or a committer
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          rc=0; python3 scripts/approval_check.py > result.md || rc=$?
+          cat result.md
+          if [ "$rc" = 0 ]; then state=success; desc="Approved by an owner who isn't the requester, on this commit"
+          elif [ "$rc" = 1 ]; then state=failure; desc="Waiting for an owner's approval (the requester's doesn't count)"
+          else state=error; desc="The check couldn't run; see the run"; fi
+          gh api "repos/${{ github.repository }}/statuses/$HEAD_SHA" -f state="$state" -f context=separation-of-duties \
+            -f description="$desc" -f target_url="$RUN_URL" >/dev/null
+          echo "separation-of-duties: $state" >> "$GITHUB_STEP_SUMMARY"
