@@ -1,11 +1,11 @@
-# Platform evaluation project (test bed G4): owned by the platform team, not a use case. The model-evaluation
-# pipeline creates one probe agent per model here (neutral instructions, no tools) and compares a candidate model
-# against the serving baseline on the same pack and judge, through the gateway like any project. No agents/ folder:
-# agent-deploy skips it.
+# Platform evaluation project (test bed G4): owned by the platform team, not a use case. The ai-gateway repository's
+# model-evaluation workflow evaluates models here, each model itself as the target (no agents), and compares a
+# candidate against the model it would replace on the same pack and judge, through the gateway like any project.
+# No agents/ folder: agent-deploy skips it.
 name: platform-eval
 display_name: Platform model evaluation
 owner: ai-platform-team
-platform_evaluation: true                  # no agents/ folder: probe agents are created by model-evaluation
+platform_evaluation: true                  # no agents/ folder; model-adoption doesn't notify it
 foundry:
   project: platform-eval
 
@@ -20,7 +20,7 @@ docs_file: project.md
 models:
   connection: platform-eval-models         # unique in the agent account (models-demo has platform-models)
   allowed:
-    # An evaluation sends every query at once: the limit must cover the whole pack's answers in a minute
+    # A model evaluation sends every query at once: the limit must cover the whole pack's answers in a minute
     # (gpt-5-mini answered with about 520 tokens each, plus reasoning). Below that, the gateway's 429 leaves items
     # unanswered and the coverage check fails the run.
     - name: gpt-5-mini                     # model A, the baseline

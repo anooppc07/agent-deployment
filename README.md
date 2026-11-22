@@ -20,6 +20,11 @@ Azure with GitHub OIDC (no secrets).
 | **agent-deploy** | each project with agent changes: validate; new Foundry versions for changed agents (hosted: image built in the environment's registry); **evaluation gate** (every evaluator at `min_pass_rate`, else the gateway keeps the previous version); register the agent API `ai/<project>` pinned to the evaluated versions, kill switches, product; Developer Portal; smoke tests through the gateway | `_agents.yml` | `agent-<env>` | none (APIM and Foundry are the record) |
 | `ci` | checks on every pull request and merge, no Azure: every definition valid, hosted agents compile, Terraform plan tests | — | — | — |
 
+**Model adoption** (`model-adoption`, daily and by hand): the platform validates new models in the ai-gateway
+repository; the gateway registry then shows `lifecycle: validated` and `replaces: <model>`. This workflow reads the
+registry and opens "Evaluate model <candidate> for project <project>" for every project that allows the replaced
+model, with the platform's evidence. Nothing outside writes into this repository.
+
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 
 ```
