@@ -124,10 +124,6 @@ run "builds_connection_and_policy_from_registry" {
     condition     = strcontains(regex("(?s)&quot;gpt-5.1&quot;\\)\">.*?</when>", azurerm_api_management_api_policy.models.xml_content), "name=\"cs-prompt-shields\" value=\"@(false)\"")
     error_message = "A judge model (registry purpose: judge) gets Prompt Shields off; nothing else changes."
   }
-  assert {
-    condition     = azurerm_api_management_named_value.status["gpt-5.4-mini"].value == "evaluating" && azurerm_api_management_named_value.status["gpt-5-mini"].value == "available"
-    error_message = "Each allowed model's project status is on the gateway (model-status-<project>-<model>): evaluating or available."
-  }
 }
 
 run "resolves_content_safety_per_model" {
@@ -186,6 +182,10 @@ run "resolves_content_safety_per_model" {
   assert {
     condition     = strcontains(azurerm_api_management_api_policy.models.xml_content, "/accounts/aif-sbx-agents-bbf0o/projects/shared-foundry\" />") && azurerm_api_management_api.models.path == "models/cs-fixture"
     error_message = "The identity check uses the endpoint's Foundry project; the model API keeps the repo project's name."
+  }
+  assert {
+    condition     = azurerm_api_management_named_value.status["gpt-x"].value == "evaluating" && azurerm_api_management_named_value.status["gpt-5-mini"].value == "available"
+    error_message = "Each allowed model's project status is on the gateway (model-status-<project>-<model>): evaluating or available (default)."
   }
 }
 
