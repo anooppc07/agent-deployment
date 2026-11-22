@@ -61,7 +61,22 @@ jobs:
     needs: evaluate
     runs-on: ubuntu-latest
     environment: model-approval
+    permissions:
+      contents: read
+      actions: read
     steps:
+      - name: Fail unless this environment requires a reviewer
+        # GitHub creates an environment the first time a workflow uses it, without protection rules: the job would then
+        # run at once and count as approval. An approval only counts when a required reviewer is configured.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rules=$(gh api "repos/${{ github.repository }}/environments/model-approval" --jq '[.protection_rules[]?.type] | join(",")')
+          echo "protection rules on model-approval: ${rules:-none}"
+          case ",$rules," in
+            *,required_reviewers,*) ;;
+            *) echo "::error::Environment model-approval has no required reviewers, so this run wasn't approved by a person. Settings > Environments > model-approval > Required reviewers, then re-run."; exit 1 ;;
+          esac
       - run: |
           echo "### Approved: ${{ inputs.pack }} (environment model-approval; requested by ${{ github.actor }}, run ${{ github.run_id }})" >> "$GITHUB_STEP_SUMMARY"
 
