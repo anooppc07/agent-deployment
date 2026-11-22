@@ -20,6 +20,7 @@ models:
       tokens_per_minute: 1000
       tokens_per_day: 10000
     - name: gpt-x            # model level on top of the project level
+      status: evaluating     # the project is evaluating gpt-x (P1): capped, status on the gateway
       tokens_per_minute: 1000
       tokens_per_day: 10000
       content_safety:
