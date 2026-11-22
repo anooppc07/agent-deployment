@@ -1,6 +1,14 @@
 # Unit: release the agents of ONE project in ONE environment (called by the agent-deploy pipeline).
-# Validate, then (not plan_only) new Foundry versions for changed agents, the evaluation gate, the project API on the
-# gateway pinned to the evaluated versions, the Developer Portal, and the smoke tests through the gateway.
+#
+#   release ─► approve ─► publish
+#
+#   release   validate; (not plan_only) new Foundry versions for changed agents; evaluation of each new version, compared
+#             with the version the gateway serves (P5). A failed agent doesn't stop the others (P2).
+#   approve   only when a passing version would move an agent onto a model the project is still evaluating (P4):
+#             GitHub environment agent-approval (add required reviewers)
+#   publish   pin each agent on its own result; a version on an evaluating model only after approval (pin lock, P3);
+#             the project API, the Developer Portal, the smoke tests, then the release table and a comment on the
+#             project's model-evaluation issue. Fails if an agent was kept on its current version.
 # plan_only: validation only, no Azure access.
 name: _agents
 
@@ -16,13 +24,15 @@ permissions:
   contents: read
 
 jobs:
-  agents:
+  release:
     name: ${{ inputs.plan_only && 'validate' || 'release' }} agents ${{ inputs.project }} (${{ inputs.environment }})
     runs-on: ubuntu-latest
     environment: agent-${{ inputs.environment }}
     concurrency:
       group: agents-${{ inputs.project }}-${{ inputs.environment }}
       cancel-in-progress: false
+    outputs:
+      needs_approval: ${{ steps.evaluate.outputs.needs_approval }}
     env:
       AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
       PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
@@ -50,12 +60,73 @@ jobs:
       - name: Deploy agents to Foundry
         if: ${{ !inputs.plan_only }}
         run: python scripts/agent_pipeline.py deploy ${{ inputs.project }}
-      - name: Foundry evaluation gate (new agent versions)
+      - name: Evaluate new agent versions, compared with the serving versions
+        id: evaluate
         if: ${{ !inputs.plan_only }}
         run: python scripts/agent_pipeline.py evaluate ${{ inputs.project }}
-      - name: Register the project API on the gateway and publish developer docs
+      - name: Keep the versions and evaluation results for publish
         if: ${{ !inputs.plan_only }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: agents-${{ inputs.project }}-${{ inputs.environment }}
+          path: .pipeline/
+          include-hidden-files: true
+
+  approve:
+    needs: release
+    if: ${{ !inputs.plan_only && needs.release.outputs.needs_approval == 'true' }}
+    name: approve agents ${{ inputs.project }} on an evaluating model (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: agent-approval
+    steps:
+      - run: |
+          echo "### Approved: agents of ${{ inputs.project }} may move onto the model they were evaluated on" >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    needs: [release, approve]
+    if: ${{ !inputs.plan_only && !cancelled() && needs.release.result == 'success' && (needs.approve.result == 'success' || needs.approve.result == 'skipped') }}
+    name: publish agents ${{ inputs.project }} (${{ inputs.environment }})
+    runs-on: ubuntu-latest
+    environment: agent-${{ inputs.environment }}
+    concurrency:
+      group: agents-${{ inputs.project }}-${{ inputs.environment }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+      issues: write
+    env:
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      PORTAL_ANONYMOUS: ${{ vars.PORTAL_ANONYMOUS }}   # "true": products visible without portal sign-in
+      ACR_NAME: ${{ vars.ACR_NAME }}                   # container registry for hosted agents' images
+      PLATFORM_ENVIRONMENT: ${{ inputs.environment }}  # hosted agents: env/<environment>.env and the platform's variables
+      PLATFORM_ENVIRONMENTS: ${{ vars.PLATFORM_ENVIRONMENTS }}  # the stages the platform offers
+      AGENT_APPROVAL: ${{ needs.approve.result == 'success' && 'approved' || '' }}   # pin lock (P3)
+      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}                                    # comment on the model-evaluation issue
+      EVAL_JUDGE_MODEL: ${{ vars.EVAL_JUDGE_MODEL || 'gpt-5.1' }}  # default evaluation judge (evals.yaml judge_model overrides)
+      # The environment's coordinates: variables of the GitHub environment (nothing about environments is in Git).
+      APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+      MODELS_PRODUCT: ${{ vars.MODELS_PRODUCT }}
+      FOUNDRY_SUBSCRIPTION_ID: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      FOUNDRY_RESOURCE_GROUP: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      FOUNDRY_ACCOUNT: ${{ vars.FOUNDRY_ACCOUNT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: agents-${{ inputs.project }}-${{ inputs.environment }}
+          path: .pipeline/
+      - name: Pin each agent on its own result and register the project API on the gateway
         run: python scripts/agent_pipeline.py register ${{ inputs.project }}
-      - name: Smoke test every agent through the gateway
-        if: ${{ !inputs.plan_only }}
+      - name: Smoke test every served agent through the gateway
         run: python scripts/agent_pipeline.py smoke ${{ inputs.project }}
+      - name: Release table, issue comment; fails if an agent was kept on its current version
+        if: ${{ !cancelled() }}
+        run: python scripts/agent_pipeline.py verdict ${{ inputs.project }}
