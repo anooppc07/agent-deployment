@@ -575,8 +575,8 @@ def validate(names):
         if not str(g.get("path", "")).startswith("ai/"):
             errors.append(f"{n}: gateway.path must start with ai/")
         if not p["agents"] and not p.get("platform_evaluation"):
-            # Only the platform's evaluation project (platform_evaluation: true) has no agents of its own: the
-            # model-evaluation pipeline creates its probe agents.
+            # Only the platform's evaluation project (platform_evaluation: true) has no agents: the platform
+            # evaluation (ai-gateway model-evaluation) targets the models themselves.
             errors.append(f"{n}: the project has no agents")
         for a in p["agents"]:
             an = a["folder"]

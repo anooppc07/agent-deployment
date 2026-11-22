@@ -28,6 +28,11 @@ on `main`: pull request with 1 approval, Code Owners review, dismiss stale appro
 `separation-of-duties`, no bypassing. Agent pins onto a model the project is evaluating keep their environment
 approval (`agent-approval`): that approval gates a deployment, not a decision.
 
+**Model adoption** (`model-adoption`, daily and by hand): the platform validates new models in the ai-gateway
+repository; the gateway registry then shows `lifecycle: validated` and `replaces: <model>`. This workflow reads the
+registry and opens "Evaluate model <candidate> for project <project>" for every project that allows the replaced
+model, with the platform's evidence. Nothing outside writes into this repository.
+
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 
 ```

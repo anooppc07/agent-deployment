@@ -1,0 +1,49 @@
+# Model adoption (test bed G5): find out from the gateway registry which models the platform has validated, and open
+# an issue for every project that uses the model being replaced (scripts/model_adoption.py).
+#
+# The platform evaluates and validates models in the ai-gateway repository (model-evaluation, then model risk's
+# review of the validation pull request); the registry then shows lifecycle validated and replaces: <baseline>. This
+# repository only reads the registry: nothing outside writes into it, and no cross-repository credential is needed.
+name: model-adoption
+
+on:
+  schedule:
+    - cron: "17 3 * * *"   # daily
+  workflow_dispatch:
+    inputs:
+      due_days:
+        description: "Days the projects get for their own evaluation"
+        default: "14"
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+concurrency:
+  group: model-adoption
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash   # -eo pipefail
+
+jobs:
+  adoption:
+    runs-on: ubuntu-latest
+    environment: agent-dev
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Open an issue per project that uses a model the platform has replaced
+        run: python scripts/model_adoption.py ${{ inputs.due_days || '14' }}
