@@ -78,7 +78,22 @@ jobs:
     name: approve agents ${{ inputs.project }} on an evaluating model (${{ inputs.environment }})
     runs-on: ubuntu-latest
     environment: agent-approval
+    permissions:
+      contents: read
+      actions: read
     steps:
+      - name: Fail unless this environment requires a reviewer
+        # GitHub creates an environment the first time a workflow uses it, without protection rules: the job would then
+        # run at once and count as approval. An approval only counts when a required reviewer is configured.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          rules=$(gh api "repos/${{ github.repository }}/environments/agent-approval" --jq '[.protection_rules[]?.type] | join(",")')
+          echo "protection rules on agent-approval: ${rules:-none}"
+          case ",$rules," in
+            *,required_reviewers,*) ;;
+            *) echo "::error::Environment agent-approval has no required reviewers, so this run wasn't approved by a person. Settings > Environments > agent-approval > Required reviewers, then re-run."; exit 1 ;;
+          esac
       - run: |
           echo "### Approved: agents of ${{ inputs.project }} may move onto the model they were evaluated on" >> "$GITHUB_STEP_SUMMARY"
 

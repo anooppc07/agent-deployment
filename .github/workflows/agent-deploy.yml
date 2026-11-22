@@ -24,6 +24,7 @@ permissions:
   id-token: write
   contents: read
   issues: write   # _agents publish comments the release table on the project's model-evaluation issue
+  actions: read   # _agents approve checks that environment agent-approval requires a reviewer
 
 concurrency:
   group: agent-deploy-${{ github.ref }}
