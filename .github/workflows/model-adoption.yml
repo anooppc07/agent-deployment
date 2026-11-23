@@ -1,5 +1,7 @@
-# Model adoption (test bed G5): find out from the gateway registry which models the platform has validated, and open
-# an issue for every project that uses the model being replaced (scripts/model_adoption.py).
+# Model adoption (test bed G5): find out from the gateway registry which models the platform has validated; for every
+# project that uses the model being replaced, open an issue and a draft pull request that proposes the adoption
+# (evaluation-only access, the agents moved to the candidate). The project team decides on the draft: edit it, mark it
+# ready for review (that starts its checks), approve and merge it, or close it (scripts/model_adoption.py).
 #
 # The platform evaluates and validates models in the ai-gateway repository (model-evaluation, then model risk's
 # review of the validation pull request); the registry then shows lifecycle validated and replaces: <baseline>. This
@@ -18,7 +20,8 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write        # the proposal's branch adopt/<candidate>-<project>
+  pull-requests: write   # the draft pull request
   issues: write
 
 concurrency:
@@ -45,5 +48,5 @@ jobs:
           azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
           azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
           azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-      - name: Open an issue per project that uses a model the platform has replaced
+      - name: Open an issue and a draft proposal per project that uses a model the platform has replaced
         run: python scripts/model_adoption.py ${{ inputs.due_days || '14' }}

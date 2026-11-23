@@ -18,6 +18,7 @@ on:
     paths: ["projects/*/tools/**", "tool-deploy/**", "scripts/tool_smoke.py"]
   pull_request:
     paths: ["projects/*/tools/**", "tool-deploy/**", "scripts/tool_smoke.py"]
+    types: [opened, synchronize, reopened, ready_for_review]   # ready_for_review: a draft opened by a workflow (model-adoption) gets its checks when a person marks it ready
   workflow_dispatch:
 
 permissions:

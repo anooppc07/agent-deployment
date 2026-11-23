@@ -18,6 +18,7 @@ on:
     paths: ["projects/*/project.yaml", "onboarding/**"]
   pull_request:
     paths: ["projects/*/project.yaml", "onboarding/**"]
+    types: [opened, synchronize, reopened, ready_for_review]   # ready_for_review: a draft opened by a workflow (model-adoption) gets its checks when a person marks it ready
   workflow_dispatch:
 
 permissions:
