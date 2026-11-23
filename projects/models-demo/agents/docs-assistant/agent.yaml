@@ -4,7 +4,7 @@ name: docs-assistant
 display_name: Docs assistant
 description: Answers Azure and Microsoft questions from Microsoft Learn documentation, with links.
 owner: ai-platform-team
-model: platform-models/gpt-5.4-mini       # issue #9: candidate B; pinned only if it passes against the serving version and is approved
+model: platform-models/gpt-5.4-nano    # issue #21: evaluated against the live version on gpt-5.4-mini; pinned only if it passes and is approved
 instructions_file: instructions.md
 
 tools:
