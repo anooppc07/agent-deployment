@@ -1,6 +1,11 @@
 """Model adoption (test bed G5): this repository finds out from the gateway registry which models the platform has
 validated, and opens an issue for each project that uses the model being replaced.
 
+  model_adoption.py available <project>
+                               after a release (agent-deploy publish): for each model the project still has as
+                               evaluating and on which this release pinned agents, propose making it available with a
+                               working share of the model's capacity (branch available/<model>-<project>, once), for
+                               the AI platform to approve
   model_adoption.py [days]     read the registry (APIM named values model-meta-*); for each model whose lifecycle is
                                validated and that replaces another model, for every project that allows the replaced
                                model and not yet the candidate:
@@ -56,16 +61,47 @@ def remote_branch(branch):
                                capture_output=True).returncode == 0)
 
 
+def existing_proposal(branch):
+    """(url, kind) for a proposal branch that exists without a pull request (a person opens it from the link); (None,
+    None) when it has a pull request; False when the branch doesn't exist."""
+    repo = os.environ["GITHUB_REPOSITORY"]
+    if not remote_branch(branch):
+        return False
+    prs = requests.get(f"https://api.github.com/repos/{repo}/pulls", timeout=30, params={
+        "head": f"{repo.split('/')[0]}:{branch}", "state": "all"},
+        headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}"}).json()
+    return (None, None) if prs else (f"https://github.com/{repo}/compare/main...{branch}?expand=1", "open")
+
+
+def open_proposal(branch, paths, title, body, draft=True):
+    """Commit the working-tree changes under paths on branch, push it, and open the pull request; where workflows may
+    not open pull requests, return the link a person opens it from. The commit message carries the whole proposal:
+    GitHub fills in the pull request from it. Returns (url, kind): kind "pr" or "open"."""
+    repo = os.environ["GITHUB_REPOSITORY"]
+    git("add", "-A", *paths)
+    git("-c", "user.name=model-adoption", "-c", "user.email=model-adoption@users.noreply.github.com",
+        "commit", "-q", "-m", title, "-m", body)
+    git("push", "-q", "origin", branch)
+    r = requests.post(f"https://api.github.com/repos/{repo}/pulls", timeout=30,
+                      headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
+                      json={"title": title, "head": branch, "base": "main", "body": body, "draft": draft})
+    git("checkout", "-q", "main")
+    if r.status_code == 403:
+        # The organisation doesn't let workflows open pull requests (common in banks: the setting "Allow GitHub
+        # Actions to create and approve pull requests" is off). Then a person opens it from the branch: one click,
+        # and as its author is a person, its checks run at once.
+        print("Workflows may not open pull requests here: the proposal is a branch with a link to open it.")
+        return f"https://github.com/{repo}/compare/main...{branch}?expand=1", "open"
+    r.raise_for_status()
+    return r.json()["html_url"], "pr"
+
+
 def propose(project, p, cand, baseline, issue_no, ev):
     """The project's adoption, as a draft pull request the project team decides on. Returns (url, agents moved)."""
     branch = f"adopt/{cand}-{project}"
-    repo = os.environ["GITHUB_REPOSITORY"]
-    compare = f"https://github.com/{repo}/compare/main...{branch}?expand=1"
-    if remote_branch(branch):
-        prs = requests.get(f"https://api.github.com/repos/{repo}/pulls", timeout=30, params={
-            "head": f"{repo.split('/')[0]}:{branch}", "state": "all"},
-            headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}"}).json()
-        return (None, None) if prs else (compare, "open")   # no pull request yet: a person opens it from the link
+    found = existing_proposal(branch)
+    if found is not False:
+        return found
     root = os.path.join(PROJECTS, project)
     git("checkout", "-q", "-B", branch, "origin/main")
     # 1. Evaluation-only access (P1): the candidate after the replaced model in models.allowed, status evaluating.
@@ -113,25 +149,8 @@ def propose(project, p, cand, baseline, issue_no, ev):
             "an agent that passes is pinned only after the use-case owner approves it (environment agent-approval). "
             f"An agent that fails stays on `{baseline}`.\n\n"
             f"Not moving? Close this pull request with the reason; `{baseline}` keeps serving.\n\nRefs #{issue_no}")
-    git("add", "-A", root)
-    # The commit message carries the whole proposal: when a person opens the pull request from the branch, GitHub
-    # fills in its title and description from it.
-    git("-c", "user.name=model-adoption", "-c", "user.email=model-adoption@users.noreply.github.com",
-        "commit", "-q", "-m", f"{project}: adopt {cand} (evaluation first)", "-m", body)
-    git("push", "-q", "origin", branch)
-    r = requests.post(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/pulls", timeout=30,
-                      headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
-                      json={"title": f"{project}: adopt {cand} (evaluation first)", "head": branch, "base": "main",
-                            "body": body, "draft": True})
-    git("checkout", "-q", "main")
-    if r.status_code == 403:
-        # The organisation doesn't let workflows open pull requests (common in banks: the setting "Allow GitHub
-        # Actions to create and approve pull requests" is off). Then a person opens it from the branch: one click,
-        # and as its author is a person, its checks run at once.
-        print("Workflows may not open pull requests here: the proposal is a branch with a link to open it.")
-        return compare, "open"
-    r.raise_for_status()
-    return r.json()["html_url"], moved
+    url, kind = open_proposal(branch, [root], f"{project}: adopt {cand} (evaluation first)", body)
+    return url, ("open" if kind == "open" else moved)
 
 
 def proposal_row(url, moved):
@@ -233,5 +252,101 @@ def main(days="14"):
             + ("\n".join(rows) or "| (no validated model replaces one that a project uses) | | | |"))
 
 
+def limits(model):
+    """Other projects' tokens per minute on a model (named values model-limit-<project>-<model>)."""
+    r = arm("GET", "namedValues", params={"$filter": "startswith(name,'model-limit-')", "$top": "100"}).json()
+    out = {}
+    for nv in r.get("value", []):
+        v = json.loads(nv["properties"].get("value") or "{}")
+        if v.get("model") == model:
+            out[v.get("project")] = int(v.get("tokens_per_minute") or 0)
+    return out
+
+
+def available(project):
+    """After a release pinned agents onto a model this project is still evaluating (at the evaluating cap): propose
+    making it available, with a working share of the model's capacity. The share is the AI platform's decision
+    (project.yaml is theirs): the proposal starts from the share of the model it replaces, within what's free."""
+    from agent_pipeline import STATE, load_project, model_of   # noqa: E402
+    outcome = {}
+    f = os.path.join(STATE, f"{project}-register.json")
+    if os.path.exists(f):
+        with open(f, encoding="utf-8") as fh:
+            outcome = json.load(fh)
+    p = load_project(project)
+    pf = os.path.join(PROJECTS, project, "project.yaml")
+    with open(pf, encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh)
+    allowed = {m["name"]: m for m in raw["models"]["allowed"]}
+    reg = registry()
+    rows = []
+    for model, m in allowed.items():
+        if m.get("status") != "evaluating":
+            continue
+        pinned = [a["name"] for a in p["agents"] if model_of(a) == model and (outcome.get(a["name"]) or {}).get("pinned")
+                  and (outcome.get(a["name"]) or {}).get("reason") is None]
+        if not pinned:
+            continue
+        branch = f"available/{model}-{project}"
+        found = existing_proposal(branch)
+        if found is not False:
+            rows.append((model, found[0]))
+            continue
+        entry = reg.get(model) or {}
+        baseline = ((entry.get("governance") or {}).get("lifecycle") or {}).get("replaces")
+        base = allowed.get(baseline) or {}
+        others = {k: v for k, v in limits(model).items() if k != project}
+        free = int(entry.get("capacity_tpm") or 0) - sum(others.values())
+        want_tpm = int(base.get("tokens_per_minute") or 3 * int(m["tokens_per_minute"]))
+        tpm = max(int(m["tokens_per_minute"]), min(want_tpm, free)) if free > 0 else int(m["tokens_per_minute"])
+        tpd = int(base.get("tokens_per_day") or 20 * tpm)
+        git("checkout", "-q", "-B", branch, "origin/main")
+        with open(pf, encoding="utf-8") as fh:
+            lines = fh.readlines()
+        start = next(i for i, l in enumerate(lines) if re.match(rf"^\s*- name: {re.escape(model)}\b", l))
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = start + 1
+        while end < len(lines) and lines[end].strip() and len(lines[end]) - len(lines[end].lstrip()) > indent:
+            end += 1
+        pad = " " * (indent + 2)
+        block = [lines[start]] + [l for l in lines[start + 1:end] if not re.match(r"^\s*(status|tokens_per_minute|tokens_per_day):", l)]
+        block += [f"{pad}tokens_per_minute: {tpm:<18}# available (default status): agents {', '.join(pinned)} serve on it\n",
+                  f"{pad}tokens_per_day: {tpd}\n"]
+        lines[start:end] = block
+        with open(pf, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        body = (f"**For the AI platform** (opened by `{os.environ.get('GITHUB_WORKFLOW', 'agent-deploy')}` after a release). "
+                f"`{project}`'s agents {', '.join(f'`{a}`' for a in pinned)} passed against their live versions, were "
+                f"approved by the use-case owner and now **serve on `{model}`**, which `{project}` still has as "
+                f"**evaluating** ({int(m['tokens_per_minute']):,} tokens per minute, the cap for evaluations).\n\n"
+                "| | |\n|---|---|\n"
+                f"| Proposed | `{model}` **available**, {tpm:,} tokens per minute, {tpd:,} per day |\n"
+                f"| Why this share | {'the share of `' + baseline + '` it replaces (' + format(want_tpm, ',') + ')' if base else 'three times the evaluating cap'}, within what's free |\n"
+                f"| Model capacity | {int(entry.get('capacity_tpm') or 0):,}; other projects {sum(others.values()):,}; free {free:,} |\n"
+                f"| Release | {os.environ.get('RUN_URL', '')} |\n\n"
+                f"Capacity is shared across projects, so the AI platform (code owner of `project.yaml`) decides the share: "
+                f"change it here if needed, then approve. `{baseline or 'The previous model'}` stays allowed for rollback "
+                "until it's retired.")
+        url, kind = open_proposal(branch, [pf], f"{project}: make {model} available", body, draft=False)
+        rows.append((model, url))
+        # On the adoption issue, if there is one.
+        title = f"Evaluate model {model} for project {project}"
+        api = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues"
+        headers = {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"}
+        issues = requests.get(api, headers=headers, timeout=30, params={"state": "open", "per_page": 100}).json()
+        no = next((i["number"] for i in issues if i.get("title") == title), None)
+        if no:
+            how = "**[open the pull request]({})**".format(url) if kind == "open" else url
+            requests.post(f"{api}/{no}/comments", headers=headers, timeout=30, json={"body":
+                f"<!-- available-proposal {model} -->\nThe agents now serve on `{model}`. Proposal to make it "
+                f"available with a working share ({tpm:,} tokens per minute), for the AI platform to approve: {how}"})
+    if rows:
+        summary("### Proposed: make models available\n\n| Model | Proposal |\n|---|---|\n"
+                + "\n".join(f"| {m} | {u or 'pull request exists'} |" for m, u in rows))
+
+
 if __name__ == "__main__":
-    main(*sys.argv[1:])
+    if sys.argv[1:2] == ["available"]:
+        available(sys.argv[2])   # after a release (agent-deploy publish)
+    else:
+        main(*sys.argv[1:])
