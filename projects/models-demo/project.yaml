@@ -24,6 +24,10 @@ models:
     - name: gpt-5.4-mini                   # issue #9: both agents passed against their versions on gpt-5-mini and were approved
       tokens_per_minute: 15000             # available (default status): the project's working share of B's 20,000 TPM
       tokens_per_day: 400000
+    - name: gpt-5.4-nano                 # issue #21: validated by the platform as gpt-5.4-mini's replacement
+      status: evaluating                   # evaluation only (P1): no agent is served on it until it passes and is approved
+      tokens_per_minute: 5000              # the evaluating cap
+      tokens_per_day: 100000
     - name: gpt-5.1                        # the evaluation judge (EVAL_JUDGE_MODEL); Prompt Shields off at the gateway
       tokens_per_minute: 30000
       tokens_per_day: 600000
