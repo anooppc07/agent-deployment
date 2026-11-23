@@ -6,6 +6,9 @@ validated, and opens an issue for each project that uses the model being replace
                                evaluating and on which this release pinned agents, propose making it available with a
                                working share of the model's capacity (branch available/<model>-<project>, once), for
                                the AI platform to approve
+  model_adoption.py held <project>
+                               after a release: agents that failed on the replacement of a retiring model (and stay on
+                               it) are posted on the project's retirement issue, with the date and the options
   model_adoption.py [days]     read the registry (APIM named values model-meta-*); for each model whose lifecycle is
                                validated and that replaces another model, for every project that allows the replaced
                                model and not yet the candidate:
@@ -263,7 +266,14 @@ def retirements(reg, api, headers, existing, open_issues):
                         "**What to do:** review the proposal linked below and merge it. "
                         + ("Your agents get new versions on the replacement; each is evaluated against its live version "
                            "and pinned only if it passes and you approve. " if on else "")
-                        + f"Then `{model}` comes out of `project.yaml`. Reminders: {', '.join(str(d) for d in REMINDERS)} days before.")
+                        + f"Then `{model}` comes out of `project.yaml`. Reminders: {', '.join(str(d) for d in REMINDERS)} days before.\n\n"
+                        f"**If an agent fails on `{repl}`** it stays on `{model}` for now, and on {date} its calls get 410 Gone. "
+                        "Before then, choose one:\n"
+                        f"1. Improve the agent (instructions, tools, its evaluation set if it no longer fits) and evaluate it on `{repl}` again.\n"
+                        f"2. Ask for an extension: a pull request in the platform repository that moves `{model}`'s retirement date, "
+                        "with the reason; the AI platform and model risk decide.\n"
+                        "3. Retire the agent.\n\n"
+                        "The release posts each failed agent here, and the retirement pull request on the date lists the projects still on it.")
                 r = requests.post(api, headers=headers, json={"title": title, "body": body}, timeout=30)
                 r.raise_for_status()
                 no = r.json()["number"]
@@ -466,8 +476,50 @@ def available(project):
                 + "\n".join(f"| {m} | {u or 'pull request exists'} |" for m, u in rows))
 
 
+def held_on_retiring(project):
+    """After a release: agents that failed on a replacement and stay on a retiring model get a comment on the
+    project's retirement issue, with the date and the options."""
+    from agent_pipeline import STATE, load_project, model_of   # noqa: E402
+    f = os.path.join(STATE, f"{project}-register.json")
+    if not os.path.exists(f):
+        return
+    with open(f, encoding="utf-8") as fh:
+        outcome = json.load(fh)
+    held = {a: o for a, o in outcome.items() if o.get("reason") == "failed evaluation"}
+    if not held:
+        return
+    reg = registry()
+    p = load_project(project)
+    api = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues"
+    headers = {"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"}
+    issues = requests.get(api, headers=headers, timeout=30, params={"state": "open", "per_page": 100}).json()
+    for old, entry in reg.items():
+        if entry.get("lifecycle") != "retiring":
+            continue
+        ret = (((entry.get("governance") or {}).get("lifecycle") or {}).get("retirement") or {})
+        repl, date = ret.get("replacement"), ret.get("date")
+        agents = [a["name"] for a in p["agents"] if a["name"] in held and model_of(a) == repl]
+        if not agents:
+            continue
+        title = f"Model {old} retires on {date}: move to {repl} ({project})"
+        no = next((i["number"] for i in issues if i.get("title") == title), None)
+        if not no:
+            continue
+        run = os.environ.get("RUN_URL", "")
+        requests.post(f"{api}/{no}/comments", headers=headers, timeout=30, json={"body":
+            f"**{', '.join(f'`{a}`' for a in agents)} failed on `{repl}`** ([release]({run})) and "
+            f"{'stay' if len(agents) > 1 else 'stays'} on `{old}`, which retires on **{date}**: from then on "
+            f"{'their' if len(agents) > 1 else 'its'} calls get 410 Gone.\n\nChoose before the date:\n"
+            f"1. Improve the agent and evaluate it on `{repl}` again (a new pull request).\n"
+            f"2. Ask for an extension: a pull request in the platform repository moving `{old}`'s retirement date, with the reason.\n"
+            "3. Retire the agent."})
+        print(f"{project}: {', '.join(agents)} held on retiring {old}; posted on #{no}")
+
+
 if __name__ == "__main__":
     if sys.argv[1:2] == ["available"]:
         available(sys.argv[2])   # after a release (agent-deploy publish)
+    elif sys.argv[1:2] == ["held"]:
+        held_on_retiring(sys.argv[2])   # after a release: agents that failed on a retiring model's replacement
     else:
         main(*sys.argv[1:])
