@@ -159,6 +159,11 @@ jobs:
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python scripts/model_adoption.py available ${{ inputs.project }}
+      - name: Agents that failed on a retiring model's replacement, on its retirement issue
+        if: ${{ !cancelled() }}
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: python scripts/model_adoption.py held ${{ inputs.project }}
       - name: Release table, issue comment; fails if an agent was kept on its current version
         if: ${{ !cancelled() }}
         run: python scripts/agent_pipeline.py verdict ${{ inputs.project }}
