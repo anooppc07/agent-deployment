@@ -47,6 +47,10 @@ resource "terraform_data" "validated" {
       error_message = "Not registered on the gateway: ${join(", ", [for n in keys(local.allowed) : n if !contains(keys(local.registry), n)])}. Registered: ${join(", ", keys(local.registry))}."
     }
     precondition {
+      condition     = alltrue([for n in keys(local.allowed) : try(local.registry[n].lifecycle, "") != "retired"])
+      error_message = "Retired on the gateway, remove from models.allowed: ${join(", ", [for n in keys(local.allowed) : "${n} (replaced by ${try(local.registry[n].governance.lifecycle.retirement.replacement, "?")})" if try(local.registry[n].lifecycle, "") == "retired"])}."
+    }
+    precondition {
       condition     = alltrue([for n, st in local.model_status : contains(["available", "evaluating"], st)])
       error_message = "models.allowed[].status must be available (default) or evaluating."
     }
