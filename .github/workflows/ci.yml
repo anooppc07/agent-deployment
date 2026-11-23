@@ -4,6 +4,7 @@ name: ci
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]   # ready_for_review: a draft opened by a workflow (model-adoption) gets its checks when a person marks it ready
   push:
     branches: [main]
 

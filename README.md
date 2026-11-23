@@ -30,8 +30,13 @@ approval (`agent-approval`): that approval gates a deployment, not a decision.
 
 **Model adoption** (`model-adoption`, daily and by hand): the platform validates new models in the ai-gateway
 repository; the gateway registry then shows `lifecycle: validated` and `replaces: <model>`. This workflow reads the
-registry and opens "Evaluate model <candidate> for project <project>" for every project that allows the replaced
-model, with the platform's evidence. Nothing outside writes into this repository.
+registry and, for every project that allows the replaced model, opens "Evaluate model <candidate> for project
+<project>" with the platform's evidence, and a **draft pull request** that proposes the adoption: the candidate in
+`models.allowed` with status `evaluating` (the cap), and each agent on the replaced model moved to the candidate. The
+project team decides: they change what they need (instructions, which agents), click **Ready for review** (that starts
+the checks; a draft opened by a workflow gets none before), and their code owners approve and merge it, or they close
+it. Merging creates the new versions; each is evaluated against its live version and pinned only if it passes and the
+use-case owner approves. Nothing outside writes into this repository.
 
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 
