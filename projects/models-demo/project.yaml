@@ -22,7 +22,7 @@ models:
       tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
       tokens_per_day: 500000
     - name: gpt-5.4-mini                   # issue #9: both agents passed against their versions on gpt-5-mini and were approved
-      tokens_per_minute: 15000             # available (default status): the project's working share of B's 20,000 TPM
+      tokens_per_minute: 8000              # available (default status): its share of B's 20,000 TPM (platform-eval 12,000 to evaluate gpt-5.4-nano)
       tokens_per_day: 400000
     - name: gpt-5.1                        # the evaluation judge (EVAL_JUDGE_MODEL); Prompt Shields off at the gateway
       tokens_per_minute: 30000
