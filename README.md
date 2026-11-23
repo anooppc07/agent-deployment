@@ -36,7 +36,7 @@ registry and, for every project that allows the replaced model, opens "Evaluate 
 project team decides: they change what they need (instructions, which agents), click **Ready for review** (that starts
 the checks; a draft opened by a workflow gets none before), and their code owners approve and merge it, or they close
 it. Merging creates the new versions; each is evaluated against its live version and pinned only if it passes and the
-use-case owner approves. Nothing outside writes into this repository.
+use-case owner approves. If the organisation doesn't let workflows open pull requests (the setting *Allow GitHub Actions to create and approve pull requests* is off, as in many banks), the job doesn't fail: the proposal is the branch, and the issue gets a one-click link for a person to open the pull request (its description comes from the commit). Nothing outside writes into this repository.
 
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 

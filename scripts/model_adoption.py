@@ -59,8 +59,13 @@ def remote_branch(branch):
 def propose(project, p, cand, baseline, issue_no, ev):
     """The project's adoption, as a draft pull request the project team decides on. Returns (url, agents moved)."""
     branch = f"adopt/{cand}-{project}"
+    repo = os.environ["GITHUB_REPOSITORY"]
+    compare = f"https://github.com/{repo}/compare/main...{branch}?expand=1"
     if remote_branch(branch):
-        return None, None
+        prs = requests.get(f"https://api.github.com/repos/{repo}/pulls", timeout=30, params={
+            "head": f"{repo.split('/')[0]}:{branch}", "state": "all"},
+            headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}"}).json()
+        return (None, None) if prs else (compare, "open")   # no pull request yet: a person opens it from the link
     root = os.path.join(PROJECTS, project)
     git("checkout", "-q", "-B", branch, "origin/main")
     # 1. Evaluation-only access (P1): the candidate after the replaced model in models.allowed, status evaluating.
@@ -92,13 +97,8 @@ def propose(project, p, cand, baseline, issue_no, ev):
             with open(af, "w", encoding="utf-8") as fh:
                 fh.write(new)
             moved.append(os.path.basename(os.path.dirname(af)))
-    git("add", "-A", root)
-    git("-c", "user.name=model-adoption", "-c", "user.email=model-adoption@users.noreply.github.com",
-        "commit", "-q", "-m", f"{project}: propose adopting {cand} (issue #{issue_no})",
-        "-m", f"Evaluation-only access to {cand}; agents moved from {baseline}: {', '.join(moved) or 'none'}.")
-    git("push", "-q", "origin", branch)
     body = (f"**Proposal for the `{project}` team** (opened by `model-adoption`; see #{issue_no}). The platform has "
-            f"validated **`{cand}`** as the replacement for **`{baseline}`**. This draft is what adopting it would "
+            f"validated **`{cand}`** as the replacement for **`{baseline}`**. This is what adopting it would "
             "change here. Nothing happens until your team decides.\n\n"
             "| | |\n|---|---|\n"
             f"| `project.yaml` | `{cand}` with status **evaluating** ({EVALUATING_TPM:,} tokens per minute): for the agents' evaluation only, not served |\n"
@@ -107,22 +107,55 @@ def propose(project, p, cand, baseline, issue_no, ev):
             "**How to decide**\n"
             f"1. Review it. Change what you need on this branch: an agent may need new instructions on `{cand}`; "
             "drop an agent you don't want to move (put its model back).\n"
-            "2. Click **Ready for review**. That starts the checks (onboarding plan, validation) and asks your code "
-            "owners to review.\n"
+            "2. If this is a draft, click **Ready for review**: that starts the checks (onboarding plan, validation) "
+            "and asks your code owners to review.\n"
             "3. Approve and merge. The new agent versions are created and each is evaluated against its live version; "
             "an agent that passes is pinned only after the use-case owner approves it (environment agent-approval). "
             f"An agent that fails stays on `{baseline}`.\n\n"
             f"Not moving? Close this pull request with the reason; `{baseline}` keeps serving.\n\nRefs #{issue_no}")
+    git("add", "-A", root)
+    # The commit message carries the whole proposal: when a person opens the pull request from the branch, GitHub
+    # fills in its title and description from it.
+    git("-c", "user.name=model-adoption", "-c", "user.email=model-adoption@users.noreply.github.com",
+        "commit", "-q", "-m", f"{project}: adopt {cand} (evaluation first)", "-m", body)
+    git("push", "-q", "origin", branch)
     r = requests.post(f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/pulls", timeout=30,
                       headers={"Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}", "Accept": "application/vnd.github+json"},
                       json={"title": f"{project}: adopt {cand} (evaluation first)", "head": branch, "base": "main",
                             "body": body, "draft": True})
-    if r.status_code == 403:
-        sys.exit("GitHub Actions may not open pull requests here: Settings > Actions > General > Workflow permissions > "
-                 "Allow GitHub Actions to create and approve pull requests, then re-run.")
-    r.raise_for_status()
     git("checkout", "-q", "main")
+    if r.status_code == 403:
+        # The organisation doesn't let workflows open pull requests (common in banks: the setting "Allow GitHub
+        # Actions to create and approve pull requests" is off). Then a person opens it from the branch: one click,
+        # and as its author is a person, its checks run at once.
+        print("Workflows may not open pull requests here: the proposal is a branch with a link to open it.")
+        return compare, "open"
+    r.raise_for_status()
     return r.json()["html_url"], moved
+
+
+def proposal_row(url, moved):
+    if not url:
+        return "proposal exists"
+    return f"[open the pull request]({url}) (a person opens it)" if moved == "open" else f"draft [proposal]({url})"
+
+
+def announce(api, headers, no, cand, url, moved):
+    """One comment on the issue per proposal: the draft pull request, or the link a person opens it from."""
+    if not url:
+        return
+    marker = f"<!-- adoption-proposal {cand} -->"
+    comments = requests.get(f"{api}/{no}/comments", headers=headers, timeout=30, params={"per_page": 100}).json()
+    if any(marker in (c.get("body") or "") for c in comments):
+        return
+    if moved == "open":
+        text = (f"{marker}\nThe proposal for adopting `{cand}` is ready on a branch: **[open the pull request]({url})**. "
+                "Workflows may not open pull requests in this repository, so a person on the project team opens it; "
+                "its checks start at once. Review it, change what you need, then ask your code owners to approve it.")
+    else:
+        text = (f"{marker}\nDraft proposal for adopting `{cand}`: {url}. Review it, change what you need, then mark it "
+                "ready for review (that starts its checks).")
+    requests.post(f"{api}/{no}/comments", headers=headers, timeout=30, json={"body": text})
 
 
 def projects():
@@ -173,10 +206,8 @@ def main(days="14"):
             if title in existing:
                 no = existing[title]
                 url, moved = propose(project, p, cand, baseline, no, ev)
-                rows.append(f"| {cand} | {project} | #{no} | {f'draft [proposal]({url}): {len(moved)} agents' if url else 'proposal exists'} |")
-                if url:
-                    requests.post(f"{api}/{no}/comments", headers=headers, timeout=30,
-                                  json={"body": f"Draft proposal for adopting `{cand}`: {url}. Review it, change what you need, then mark it ready for review."})
+                rows.append(f"| {cand} | {project} | #{no} | {proposal_row(url, moved)} |")
+                announce(api, headers, no, cand, url, moved)
                 continue
             body = (f"The platform has validated **`{cand}`** as the replacement for **`{baseline}`**, which "
                     f"`{project}` uses today.\n\n| | |\n|---|---|\n| Evaluate by | **{due}** |\n"
@@ -196,10 +227,8 @@ def main(days="14"):
             r.raise_for_status()
             no = r.json()["number"]
             url, moved = propose(project, p, cand, baseline, no, ev)
-            if url:
-                requests.post(f"{api}/{no}/comments", headers=headers, timeout=30,
-                              json={"body": f"Draft proposal for adopting `{cand}`: {url}. Review it, change what you need, then mark it ready for review."})
-            rows.append(f"| {cand} | {project} | opened [#{no}]({r.json()['html_url']}) | {f'draft [proposal]({url})' if url else 'proposal exists'} |")
+            announce(api, headers, no, cand, url, moved)
+            rows.append(f"| {cand} | {project} | opened [#{no}]({r.json()['html_url']}) | {proposal_row(url, moved)} |")
     summary("### Model adoption (from the gateway registry)\n\n| Validated model | Project | Issue | Proposal |\n|---|---|---|---|\n"
             + ("\n".join(rows) or "| (no validated model replaces one that a project uses) | | | |"))
 
