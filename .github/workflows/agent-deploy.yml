@@ -23,7 +23,8 @@ on:
 
 permissions:
   id-token: write
-  contents: read
+  contents: write        # _agents publish: the proposal branch available/<model>-<project>
+  pull-requests: write   # _agents publish: its pull request
   issues: write   # _agents publish comments the release table on the project's model-evaluation issue
   actions: read   # _agents approve checks that environment agent-approval requires a reviewer
 
