@@ -1,0 +1,37 @@
+# Test fixture: a snapshot of this repository's project, as the onboarding tests expect it. Projects change
+# their own project.yaml (new models, limits) without breaking the platform's tests; update this only with the tests.
+# Test bed project in the dev stage (sandbox): agents that use platform models through the AI gateway.
+name: models-demo
+display_name: Models demo (test)
+owner: ai-platform-team
+foundry:                                   # the use case's Foundry project, created by use-case onboarding
+  project: models-demo                     # created by use-case onboarding in the environment's agent account
+
+gateway:
+  path: ai/models-demo
+  product: agents-test
+  rate_limit_per_minute: 60
+  quota_per_day: 1000
+
+docs_file: project.md
+
+# Platform models this project's agents may use (agents set model: platform-models/<model>).
+models:
+  connection: platform-models
+  # content_safety: not set: platform defaults (severity 4 per category, Prompt Shields on).
+  allowed:
+    - name: gpt-5-mini                     # model A: no agent uses it since issue #9; kept for rollback until retired
+      tokens_per_minute: 20000             # share of the model's 50,000 TPM in the sandbox
+      tokens_per_day: 500000
+    - name: gpt-5.4-mini                   # issue #9: both agents passed against their versions on gpt-5-mini and were approved
+      tokens_per_minute: 15000             # available (default status): the project's working share of B's 20,000 TPM
+      tokens_per_day: 400000
+    - name: gpt-5.1                        # the evaluation judge (EVAL_JUDGE_MODEL); Prompt Shields off at the gateway
+      tokens_per_minute: 30000
+      tokens_per_day: 600000
+
+# Tools this project's agents may use: <owner project>/<tool>, published by the owner's tool-deploy pipeline and shared
+# with this project's Foundry project. Use-case onboarding creates the connection.
+tools:
+  use:
+    - models-demo/ms-learn                 # this project's own tool (projects/models-demo/tools/ms-learn)

@@ -1,0 +1,36 @@
+# Test fixture: a snapshot of this repository's project, as the onboarding tests expect it. Projects change
+# their own project.yaml (new models, limits) without breaking the platform's tests; update this only with the tests.
+# Platform evaluation project (test bed G4): owned by the platform team, not a use case. The ai-gateway repository's
+# model-evaluation workflow evaluates models here, each model itself as the target (no agents), and compares a
+# candidate against the model it would replace on the same pack and judge, through the gateway like any project.
+# No agents/ folder: agent-deploy skips it.
+name: platform-eval
+display_name: Platform model evaluation
+owner: ai-platform-team
+platform_evaluation: true                  # no agents/ folder; model-adoption doesn't notify it
+foundry:
+  project: platform-eval
+
+gateway:
+  path: ai/platform-eval
+  product: agents-test
+  rate_limit_per_minute: 60
+  quota_per_day: 2000
+
+docs_file: project.md
+
+models:
+  connection: platform-eval-models         # unique in the agent account (models-demo has platform-models)
+  allowed:
+    # A model evaluation sends every query at once: the limit must cover the whole pack's answers in a minute
+    # (gpt-5-mini answered with about 520 tokens each, plus reasoning). Below that, the gateway's 429 leaves items
+    # unanswered and the coverage check fails the run.
+    - name: gpt-5-mini                     # model A, the baseline
+      tokens_per_minute: 30000             # with models-demo's 20000: the model's full 50000
+      tokens_per_day: 600000
+    - name: gpt-5.4-mini                   # model B: approved and serving models-demo; the baseline for the next candidate
+      tokens_per_minute: 5000              # of 20000; models-demo has 15000. Raise (or B's capacity) before evaluating a new candidate against it
+      tokens_per_day: 100000
+    - name: gpt-5.1                        # the judge (EVAL_JUDGE_MODEL): one run used ~97k judge tokens in 1-2 minutes
+      tokens_per_minute: 100000            # of the judge's 150000; 50000 left for projects' own evaluations (P5)
+      tokens_per_day: 2000000

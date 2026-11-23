@@ -1,7 +1,9 @@
 # Plan tests with mocked providers: the registry (model-meta-*) and other projects' limits (model-limit-*) are
 # mocked as if read from APIM. No Azure access.
 variables {
-  project     = "models-demo"
+  project      = "models-demo"
+  projects_dir = "tests/fixtures/repo-projects" # a snapshot of models-demo and platform-eval, not projects/: a project's
+  # own change (a new model, new limits) mustn't break the platform's tests
   environment = "dev"
   # Fixture platform coordinates (in the pipeline: GitHub environment variables).
   apim_subscription_id    = "00000000-0000-0000-0000-000000000000"
