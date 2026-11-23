@@ -38,6 +38,8 @@ the checks; a draft opened by a workflow gets none before), and their code owner
 it. Merging creates the new versions; each is evaluated against its live version and pinned only if it passes and the
 use-case owner approves. Once agents serve on a model the project still has as `evaluating` (the cap), `agent-deploy` proposes the last step itself: the model `available` with a working share of its capacity (starting from the share of the model it replaces, within what's free), for the AI platform to approve; capacity is shared across projects, so the use-case owner's pin approval doesn't grant it. If the organisation doesn't let workflows open pull requests (the setting *Allow GitHub Actions to create and approve pull requests* is off, as in many banks), the job doesn't fail: the proposal is the branch, and the issue gets a one-click link for a person to open the pull request (its description comes from the commit). Nothing outside writes into this repository.
 
+**Model retirement.** When the platform gives a model a retirement date (registry `lifecycle: retiring`, with a validated replacement), `model-adoption` opens *Model <model> retires on <date>: move to <replacement> (<project>)* in each project that still allows it, with a proposal: adopt the replacement (when the project doesn't allow it yet), move the agents still on the model, or, when none is left, remove the model from `models.allowed`. Reminders follow 30, 14, 7 and 1 days before the date. After the date the gateway answers 410, and use-case onboarding refuses a retired model in `models.allowed`.
+
 Every pipeline has the same shape: `plan ─► (wait ─►) dev ─► uat ─► prd`, one box per tool or project in each stage.
 
 ```

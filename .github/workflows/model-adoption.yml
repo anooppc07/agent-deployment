@@ -2,6 +2,9 @@
 # project that uses the model being replaced, open an issue and a draft pull request that proposes the adoption
 # (evaluation-only access, the agents moved to the candidate). The project team decides on the draft: edit it, mark it
 # ready for review (that starts its checks), approve and merge it, or close it (scripts/model_adoption.py).
+# Retirement: for each model the registry shows as retiring, an issue per project that still allows it (date,
+# replacement, the replacement's platform evaluation), a proposal (adopt the replacement, move the agents, or remove
+# the model), and reminders 30, 14, 7 and 1 days before the date.
 #
 # The platform evaluates and validates models in the ai-gateway repository (model-evaluation, then model risk's
 # review of the validation pull request); the registry then shows lifecycle validated and replaces: <baseline>. This

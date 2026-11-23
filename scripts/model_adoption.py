@@ -159,7 +159,7 @@ def proposal_row(url, moved):
     return f"[open the pull request]({url}) (a person opens it)" if moved == "open" else f"draft [proposal]({url})"
 
 
-def announce(api, headers, no, cand, url, moved):
+def announce(api, headers, no, cand, url, moved, what=None):
     """One comment on the issue per proposal: the draft pull request, or the link a person opens it from."""
     if not url:
         return
@@ -168,13 +168,130 @@ def announce(api, headers, no, cand, url, moved):
     if any(marker in (c.get("body") or "") for c in comments):
         return
     if moved == "open":
-        text = (f"{marker}\nThe proposal for adopting `{cand}` is ready on a branch: **[open the pull request]({url})**. "
+        text = (f"{marker}\nThe proposal for {what or f'adopting `{cand}`'} is ready on a branch: **[open the pull request]({url})**. "
                 "Workflows may not open pull requests in this repository, so a person on the project team opens it; "
                 "its checks start at once. Review it, change what you need, then ask your code owners to approve it.")
     else:
-        text = (f"{marker}\nDraft proposal for adopting `{cand}`: {url}. Review it, change what you need, then mark it "
+        text = (f"{marker}\nProposal for {what or f'adopting `{cand}`'}: {url}. Review it, change what you need, then mark it "
                 "ready for review (that starts its checks).")
     requests.post(f"{api}/{no}/comments", headers=headers, timeout=30, json={"body": text})
+
+
+REMINDERS = (30, 14, 7, 1)   # days before a retirement date
+
+
+def agents_on(project, model):
+    out = []
+    for af in sorted(glob.glob(os.path.join(PROJECTS, project, "agents", "*", "agent.yaml"))):
+        with open(af, encoding="utf-8") as fh:
+            m = (yaml.safe_load(fh) or {}).get("model", "")
+        if str(m).split("/")[-1] == model:
+            out.append(os.path.basename(os.path.dirname(af)))
+    return out
+
+
+def propose_cleanup(project, model, repl, issue_no, moving):
+    """The project already allows the replacement: move the agents still on the retiring model to it, or, when none
+    is left, remove the retiring model from models.allowed. Returns (url, kind) or (None, None)."""
+    branch = f"retire/{model}-{project}"
+    found = existing_proposal(branch)
+    if found is not False:
+        return found
+    root = os.path.join(PROJECTS, project)
+    git("checkout", "-q", "-B", branch, "origin/main")
+    if moving:
+        for a in moving:
+            af = os.path.join(root, "agents", a, "agent.yaml")
+            with open(af, encoding="utf-8") as fh:
+                text = fh.read()
+            text = re.sub(rf"^model:\s*(\S+)/{re.escape(model)}\b.*$",
+                          lambda m: f"model: {m.group(1)}/{repl:<16}# issue #{issue_no}: {model} retires; evaluated against the live version, pinned only if it passes and is approved",
+                          text, flags=re.M)
+            with open(af, "w", encoding="utf-8") as fh:
+                fh.write(text)
+        what = (f"Moves {', '.join(f'`{a}`' for a in moving)} from `{model}` to `{repl}`. Each new version is evaluated "
+                "against its live version and pinned only if it passes and the use-case owner approves.")
+        title = f"{project}: move agents off {model} (retiring) to {repl}"
+    else:
+        pf = os.path.join(root, "project.yaml")
+        with open(pf, encoding="utf-8") as fh:
+            lines = fh.readlines()
+        start = next(i for i, l in enumerate(lines) if re.match(rf"^\s*- name: {re.escape(model)}\b", l))
+        indent = len(lines[start]) - len(lines[start].lstrip())
+        end = start + 1
+        while end < len(lines) and lines[end].strip() and len(lines[end]) - len(lines[end].lstrip()) > indent:
+            end += 1
+        del lines[start:end]
+        with open(pf, "w", encoding="utf-8") as fh:
+            fh.writelines(lines)
+        what = (f"No agent uses `{model}` any more, and `{repl}` is already allowed. Removes `{model}` from "
+                "`models.allowed`, which also frees its capacity for other projects.")
+        title = f"{project}: remove {model} (retiring)"
+    body = (f"**For the `{project}` team** (opened by `model-adoption`; see #{issue_no}). {what}\n\n"
+            f"Not ready? Close this pull request with the reason; the issue keeps reminding until the date.\n\nRefs #{issue_no}")
+    return open_proposal(branch, [root], title, body, draft=False)
+
+
+def retirements(reg, api, headers, existing, open_issues):
+    """For each retiring model: an issue per project that still allows it, with the date and the replacement, and a
+    proposal (adopt the replacement, move the agents, or remove the model); reminders before the date."""
+    rows = []
+    today = datetime.date.today()
+    for model, entry in sorted(reg.items()):
+        if entry.get("lifecycle") != "retiring":
+            continue
+        life = (entry.get("governance") or {}).get("lifecycle") or {}
+        ret = life.get("retirement") or {}
+        repl, date = ret.get("replacement"), str(ret.get("date"))
+        left = (datetime.date.fromisoformat(date) - today).days
+        rev = (((reg.get(repl) or {}).get("governance") or {}).get("lifecycle") or {}).get("evaluation") or {}
+        for project, p in projects():
+            allowed = {m.get("name") for m in (p.get("models") or {}).get("allowed", [])}
+            if model not in allowed:
+                continue
+            on = agents_on(project, model)
+            title = f"Model {model} retires on {date}: move to {repl} ({project})"
+            no = existing.get(title)
+            if no is None:
+                body = (f"**`{model}` retires on {date}** ({left} days). On that date the gateway answers calls to it with "
+                        f"410 Gone, for every project. Its replacement is **`{repl}`**, validated by model risk as the "
+                        f"replacement of `{model}`.\n\n| | |\n|---|---|\n"
+                        f"| Reason | {ret.get('reason', '')} |\n"
+                        f"| Replacement's platform evaluation | pack {rev.get('pack', '?')}, against `{model}` {rev.get('baseline_version', '?')}, judge `{rev.get('judge', '?')}` · [run]({rev.get('run', '')}) · evidence `{rev.get('record', '?')}` |\n"
+                        f"| Agents of `{project}` on `{model}` | {', '.join(f'`{a}`' for a in on) or 'none'} |\n"
+                        f"| Owner | {p.get('owner', '')} |\n\n"
+                        "**What to do:** review the proposal linked below and merge it. "
+                        + ("Your agents get new versions on the replacement; each is evaluated against its live version "
+                           "and pinned only if it passes and you approve. " if on else "")
+                        + f"Then `{model}` comes out of `project.yaml`. Reminders: {', '.join(str(d) for d in REMINDERS)} days before.")
+                r = requests.post(api, headers=headers, json={"title": title, "body": body}, timeout=30)
+                r.raise_for_status()
+                no = r.json()["number"]
+                existing[title] = no
+                open_issues.add(no)
+                state = "notified"
+            else:
+                state = "issue exists"
+            if repl not in allowed:
+                url, kind = propose(project, p, repl, model, no, rev)
+            else:
+                url, kind = propose_cleanup(project, model, repl, no, on)
+            announce(api, headers, no, repl if repl not in allowed else f"{model}-retirement", url, kind,
+                     what=None if repl not in allowed else f"moving off `{model}` before it retires")
+            # Reminder: the nearest threshold reached, once, while the issue is open.
+            due = [d for d in REMINDERS if left <= d]
+            if no in open_issues and due and left >= 0:
+                t = min(due)
+                marker = f"<!-- retirement-reminder {model} {t} -->"
+                comments = requests.get(f"{api}/{no}/comments", headers=headers, timeout=30, params={"per_page": 100}).json()
+                if not any(marker in (c.get("body") or "") for c in comments):
+                    requests.post(f"{api}/{no}/comments", headers=headers, timeout=30, json={"body":
+                        f"{marker}\n**Reminder: `{model}` retires in {left} days ({date}).** "
+                        + (f"Agents still on it: {', '.join(f'`{a}`' for a in on)}. " if on else "")
+                        + f"`{model}` is still in `project.yaml`."})
+                    state += f", reminder {t} days"
+            rows.append(f"| {model} (retiring {date}) | {project} | #{no} ({state}) | {proposal_row(url, kind)} |")
+    return rows
 
 
 def projects():
@@ -193,7 +310,7 @@ def main(days="14"):
     repo, token = os.environ["GITHUB_REPOSITORY"], os.environ["GITHUB_TOKEN"]
     api = f"https://api.github.com/repos/{repo}/issues"
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
-    existing, page = {}, 1
+    existing, open_issues, page = {}, set(), 1
     while True:
         batch = requests.get(api, headers=headers, params={"state": "all", "per_page": 100, "page": page}, timeout=30)
         if batch.status_code == 410:
@@ -201,6 +318,7 @@ def main(days="14"):
         batch.raise_for_status()
         items = batch.json()
         existing.update({i["title"]: i["number"] for i in items if "pull_request" not in i})
+        open_issues.update(i["number"] for i in items if "pull_request" not in i and i["state"] == "open")
         if len(items) < 100:
             break
         page += 1
@@ -213,6 +331,8 @@ def main(days="14"):
         baseline = life.get("replaces")
         if entry.get("lifecycle") != "validated" or not baseline:
             continue
+        if (reg.get(baseline) or {}).get("lifecycle") in ("retiring", "retired"):
+            continue   # the baseline's retirement notice (below) tells its projects, with this model as the move
         ev = life.get("evaluation") or {}
         for project, p in projects():
             allowed = {m.get("name") for m in (p.get("models") or {}).get("allowed", [])}
@@ -248,6 +368,7 @@ def main(days="14"):
             url, moved = propose(project, p, cand, baseline, no, ev)
             announce(api, headers, no, cand, url, moved)
             rows.append(f"| {cand} | {project} | opened [#{no}]({r.json()['html_url']}) | {proposal_row(url, moved)} |")
+    rows += retirements(reg, api, headers, existing, open_issues)
     summary("### Model adoption (from the gateway registry)\n\n| Validated model | Project | Issue | Proposal |\n|---|---|---|---|\n"
             + ("\n".join(rows) or "| (no validated model replaces one that a project uses) | | | |"))
 
