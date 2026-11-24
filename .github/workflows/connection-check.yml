@@ -1,0 +1,40 @@
+# Architecture check, run by hand: can a project's model connection reach models it isn't allowed to use?
+# Temporary connections and a temporary agent in <project>'s Foundry project, deleted at the end. Changes nothing else.
+# See scripts/connection_check.py for the rows.
+name: connection-check
+
+on:
+  workflow_dispatch:
+    inputs:
+      project: {description: "Project that tries (its Foundry project gets the temporary connections)", default: platform-eval}
+      other: {description: "Project whose models and API it tries to reach", default: models-demo}
+      environment: {description: Environment, default: dev}
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: model-${{ inputs.environment }}
+    env:
+      APIM_SUBSCRIPTION_ID: ${{ vars.APIM_SUBSCRIPTION_ID }}
+      APIM_RESOURCE_GROUP: ${{ vars.APIM_RESOURCE_GROUP }}
+      APIM_NAME: ${{ vars.APIM_NAME }}
+      MODELS_PRODUCT: ${{ vars.MODELS_PRODUCT }}
+      FOUNDRY_SUBSCRIPTION_ID: ${{ vars.FOUNDRY_SUBSCRIPTION_ID }}
+      FOUNDRY_RESOURCE_GROUP: ${{ vars.FOUNDRY_RESOURCE_GROUP }}
+      FOUNDRY_ACCOUNT: ${{ vars.FOUNDRY_ACCOUNT }}
+      AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          azure-client-id: ${{ vars.AZURE_CLIENT_ID }}
+          azure-tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          azure-subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - name: Connection check
+        run: |
+          set -o pipefail
+          python scripts/connection_check.py "${{ inputs.project }}" "${{ inputs.other }}"
